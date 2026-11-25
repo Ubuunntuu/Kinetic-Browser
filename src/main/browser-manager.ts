@@ -5,11 +5,13 @@ import {
   BookmarkItem,
   BrowserSettings,
   BrowserStatePayload,
+  CustomizationProfile,
   DownloadEntry,
   KINETIC_NEWTAB_URL,
   QuickLinkItem,
   SavedSessionTab,
   SEARCH_ENGINES,
+  TabCustomStyle,
   TabState,
   UserProfile
 } from '../shared/types'
@@ -28,7 +30,7 @@ export class BrowserManager {
   private tabOrder: string[] = []
   private activeTabId: string | null = null
   private rightDrawerOpen: boolean = false
-  private rightDrawerWidth: number = 380
+  private rightDrawerWidth: number = 420
   private activeDownloads: Map<string, DownloadItem> = new Map()
   private hookedPartitions: Set<string> = new Set()
 
@@ -67,6 +69,7 @@ export class BrowserManager {
         const id = this.createTab(urlToLoad, {
           isPrivate: false,
           isPinned: savedTab.isPinned,
+          customStyle: savedTab.customStyle,
           skipSessionSave: true
         })
         createdIds.push(id)
@@ -161,7 +164,12 @@ export class BrowserManager {
 
   public createTab(
     initialInput?: string,
-    options?: { isPrivate?: boolean; isPinned?: boolean; skipSessionSave?: boolean }
+    options?: {
+      isPrivate?: boolean
+      isPinned?: boolean
+      customStyle?: TabCustomStyle
+      skipSessionSave?: boolean
+    }
   ): string {
     const settings = this.storage.getSettings()
     const targetUrl = initialInput
@@ -194,7 +202,7 @@ export class BrowserManager {
     const cleanUA = defaultUA
       .replace(/\sElectron\/[\d.]+/, '')
       .replace(/\skinetic-browser\/[\d.]+/i, '')
-    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.3.2`)
+    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.4.0`)
 
     const initialState: TabState = {
       id: tabId,
@@ -210,7 +218,8 @@ export class BrowserManager {
       isMuted: false,
       isPinned: Boolean(options?.isPinned),
       isPrivate,
-      profileId
+      profileId,
+      customStyle: options?.customStyle
     }
 
     this.tabs.set(tabId, { state: initialState, view })
@@ -230,6 +239,17 @@ export class BrowserManager {
     }
 
     return tabId
+  }
+
+  public updateTabCustomStyle(tabId: string, style: TabCustomStyle): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    tab.state.customStyle = {
+      ...tab.state.customStyle,
+      ...style
+    }
+    this.persistCurrentSession()
+    this.broadcastState()
   }
 
   private attachWebContentsListeners(tabId: string, view: WebContentsView): void {
@@ -367,7 +387,8 @@ export class BrowserManager {
         nonPrivateTabs.push({
           url: tab.state.url,
           title: tab.state.title,
-          isPinned: tab.state.isPinned
+          isPinned: tab.state.isPinned,
+          customStyle: tab.state.customStyle
         })
       }
     }
@@ -443,7 +464,10 @@ export class BrowserManager {
 
   public duplicateTab(tabId: string): string {
     const source = this.tabs.get(tabId)
-    return this.createTab(source?.state.url, { isPrivate: source?.state.isPrivate })
+    return this.createTab(source?.state.url, {
+      isPrivate: source?.state.isPrivate,
+      customStyle: source?.state.customStyle
+    })
   }
 
   public togglePinTab(tabId: string): void {
@@ -657,9 +681,50 @@ export class BrowserManager {
     }
   }
 
+  // Phase 4 Customization Handlers
+  public updateCustomization(partial: Partial<CustomizationProfile>): CustomizationProfile {
+    const updated = this.storage.updateCustomization(partial)
+    this.updateLayoutBounds()
+    this.broadcastState()
+    return updated
+  }
+
+  public applyThemePreset(presetId: string): CustomizationProfile {
+    const updated = this.storage.applyThemePreset(presetId)
+    this.updateLayoutBounds()
+    this.broadcastState()
+    return updated
+  }
+
+  public saveCustomTheme(name: string): CustomizationProfile {
+    const saved = this.storage.saveCustomTheme(name)
+    this.broadcastState()
+    return saved
+  }
+
+  public deleteCustomTheme(themeId: string): void {
+    this.storage.deleteCustomTheme(themeId)
+    this.updateLayoutBounds()
+    this.broadcastState()
+  }
+
+  public importCustomizationJson(jsonString: string): CustomizationProfile {
+    const imported = this.storage.importCustomizationJson(jsonString)
+    this.updateLayoutBounds()
+    this.broadcastState()
+    return imported
+  }
+
+  public resetCustomization(): CustomizationProfile {
+    const reset = this.storage.resetCustomization()
+    this.updateLayoutBounds()
+    this.broadcastState()
+    return reset
+  }
+
   public setRightDrawerOpen(isOpen: boolean, width?: number): void {
     this.rightDrawerOpen = isOpen
-    if (typeof width === 'number' && width >= 260 && width <= 640) {
+    if (typeof width === 'number' && width >= 260 && width <= 680) {
       this.rightDrawerWidth = width
     } else {
       this.rightDrawerWidth = this.storage.getSettings().sidebarOpenWidth
@@ -667,17 +732,11 @@ export class BrowserManager {
     this.updateLayoutBounds()
   }
 
-  public getEffectiveChromeHeight(): number {
-    const settings = this.storage.getSettings()
-    const baseHeight = 82
-    const bookmarksBarHeight = settings.showBookmarksBar ? 30 : 0
-    return baseHeight + bookmarksBarHeight
-  }
-
   public updateLayoutBounds(): void {
     if (this.baseWindow.isDestroyed()) return
     const bounds = this.baseWindow.getContentBounds()
-    const chromeHeight = this.getEffectiveChromeHeight()
+    const settings = this.storage.getSettings()
+    const custom = this.storage.getCustomization()
 
     this.uiView.setBounds({
       x: 0,
@@ -694,13 +753,27 @@ export class BrowserManager {
       return
     }
 
-    const rightInset = this.rightDrawerOpen ? this.rightDrawerWidth : 0
-    const contentWidth = Math.max(200, bounds.width - rightInset)
-    const contentHeight = Math.max(100, bounds.height - chromeHeight)
+    const isVerticalTabs = custom.tabs.orientation === 'vertical'
+    const isBottomTaskbar = custom.taskbar.position === 'bottom'
+
+    const topTabStripHeight = isVerticalTabs ? 36 : Math.max(36, custom.tabs.tabHeight + 10)
+    const navbarHeight = custom.taskbar.height
+    const bookmarksHeight = settings.showBookmarksBar ? 30 : 0
+
+    const topOffset = isBottomTaskbar
+      ? topTabStripHeight + bookmarksHeight
+      : topTabStripHeight + navbarHeight + bookmarksHeight
+
+    const bottomOffset = isBottomTaskbar ? navbarHeight : 0
+    const leftOffset = isVerticalTabs ? custom.tabs.verticalSidebarWidth : 0
+    const rightOffset = this.rightDrawerOpen ? this.rightDrawerWidth : 0
+
+    const contentWidth = Math.max(200, bounds.width - leftOffset - rightOffset)
+    const contentHeight = Math.max(100, bounds.height - topOffset - bottomOffset)
 
     active.view.setBounds({
-      x: 0,
-      y: chromeHeight,
+      x: leftOffset,
+      y: topOffset,
       width: contentWidth,
       height: contentHeight
     })
@@ -741,6 +814,8 @@ export class BrowserManager {
       activeTabId: this.activeTabId,
       isMaximized: this.baseWindow.isMaximized(),
       settings: this.storage.getSettings(),
+      customization: this.storage.getCustomization(),
+      savedThemes: this.storage.getAllThemes(),
       history: this.storage.getHistory(),
       bookmarks: this.storage.getBookmarks(),
       bookmarkFolders: this.storage.getBookmarkFolders(),

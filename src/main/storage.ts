@@ -5,9 +5,12 @@ import { randomUUID } from 'crypto'
 import {
   BookmarkItem,
   BrowserSettings,
+  BUILTIN_THEME_PRESETS,
+  CustomizationProfile,
   DEFAULT_SETTINGS,
   DownloadEntry,
   HistoryEntry,
+  KINETIC_DARK_PRESET,
   KINETIC_NEWTAB_URL,
   QuickLinkItem,
   SavedSessionTab,
@@ -18,6 +21,8 @@ import {
 interface PersistentDatabase {
   schemaVersion?: number
   settings: BrowserSettings
+  customization: CustomizationProfile
+  customThemes: CustomizationProfile[]
   history: HistoryEntry[]
   bookmarks: BookmarkItem[]
   bookmarkFolders: string[]
@@ -28,7 +33,7 @@ interface PersistentDatabase {
   sessionsByProfile: Record<string, { tabs: SavedSessionTab[]; activeIndex: number }>
 }
 
-const CURRENT_SCHEMA_VERSION = 2
+const CURRENT_SCHEMA_VERSION = 3
 
 const DEFAULT_PROFILE: UserProfile = {
   id: 'default',
@@ -111,6 +116,28 @@ export class SettingsStorage {
     this.db = this.loadFromDisk()
   }
 
+  private mergeCustomization(raw?: Partial<CustomizationProfile>): CustomizationProfile {
+    if (!raw) return JSON.parse(JSON.stringify(KINETIC_DARK_PRESET))
+    return {
+      id: raw.id || KINETIC_DARK_PRESET.id,
+      name: raw.name || KINETIC_DARK_PRESET.name,
+      isBuiltIn: raw.isBuiltIn ?? false,
+      appearance: { ...KINETIC_DARK_PRESET.appearance, ...(raw.appearance || {}) },
+      taskbar: { ...KINETIC_DARK_PRESET.taskbar, ...(raw.taskbar || {}) },
+      tabs: { ...KINETIC_DARK_PRESET.tabs, ...(raw.tabs || {}) },
+      searchBar: { ...KINETIC_DARK_PRESET.searchBar, ...(raw.searchBar || {}) },
+      sounds: {
+        ...KINETIC_DARK_PRESET.sounds,
+        ...(raw.sounds || {}),
+        events: {
+          ...KINETIC_DARK_PRESET.sounds.events,
+          ...(raw.sounds?.events || {})
+        }
+      },
+      customCss: typeof raw.customCss === 'string' ? raw.customCss : KINETIC_DARK_PRESET.customCss
+    }
+  }
+
   private validateSettings(raw: Partial<BrowserSettings> | undefined): BrowserSettings {
     const s = raw || {}
     const engine =
@@ -150,7 +177,7 @@ export class SettingsStorage {
       sidebarOpenWidth:
         typeof s.sidebarOpenWidth === 'number' &&
         s.sidebarOpenWidth >= 280 &&
-        s.sidebarOpenWidth <= 640
+        s.sidebarOpenWidth <= 680
           ? s.sidebarOpenWidth
           : DEFAULT_SETTINGS.sidebarOpenWidth,
       enableSmoothScrolling:
@@ -176,12 +203,11 @@ export class SettingsStorage {
             ? parsed.activeProfileId
             : profiles[0].id
 
-        // Migrate away from old premade bookmarks (bm-1, bm-2, bm-3, bm-4) to clean YouTube/Steam/Discord defaults
         let bookmarks: BookmarkItem[] = Array.isArray(parsed.bookmarks)
           ? parsed.bookmarks
           : [...DEFAULT_BOOKMARKS]
 
-        if (!parsed.schemaVersion || parsed.schemaVersion < CURRENT_SCHEMA_VERSION) {
+        if (!parsed.schemaVersion || parsed.schemaVersion < 2) {
           const oldPremadeIds = new Set(['bm-1', 'bm-2', 'bm-3', 'bm-4'])
           const userCustomBookmarks = bookmarks.filter((b) => !oldPremadeIds.has(b.id))
           const existingUrls = new Set(userCustomBookmarks.map((b) => b.url))
@@ -190,15 +216,17 @@ export class SettingsStorage {
         }
 
         const quickLinks: QuickLinkItem[] =
-          Array.isArray(parsed.quickLinks) &&
-          parsed.schemaVersion &&
-          parsed.schemaVersion >= CURRENT_SCHEMA_VERSION
+          Array.isArray(parsed.quickLinks) && parsed.schemaVersion && parsed.schemaVersion >= 2
             ? parsed.quickLinks
             : [...DEFAULT_QUICK_LINKS]
 
         const loaded: PersistentDatabase = {
           schemaVersion: CURRENT_SCHEMA_VERSION,
           settings: this.validateSettings(parsed.settings),
+          customization: this.mergeCustomization(parsed.customization),
+          customThemes: Array.isArray(parsed.customThemes)
+            ? parsed.customThemes.map((t) => this.mergeCustomization(t))
+            : [],
           history: Array.isArray(parsed.history) ? parsed.history.slice(0, 1500) : [],
           bookmarks,
           bookmarkFolders:
@@ -224,6 +252,8 @@ export class SettingsStorage {
     const fresh: PersistentDatabase = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       settings: { ...DEFAULT_SETTINGS },
+      customization: JSON.parse(JSON.stringify(KINETIC_DARK_PRESET)),
+      customThemes: [],
       history: [],
       bookmarks: [...DEFAULT_BOOKMARKS],
       bookmarkFolders: ['Bookmarks Bar', 'Gaming', 'Custom'],
@@ -255,6 +285,10 @@ export class SettingsStorage {
 
   public updateSettings(partial: Partial<BrowserSettings>): BrowserSettings {
     this.db.settings = this.validateSettings({ ...this.db.settings, ...partial })
+    if (partial.accentColor) {
+      this.db.customization.appearance.accentPrimary = partial.accentColor
+      this.db.customization.tabs.activeTabBorderColor = partial.accentColor
+    }
     this.saveToDisk()
     return this.getSettings()
   }
@@ -263,6 +297,110 @@ export class SettingsStorage {
     this.db.settings = { ...DEFAULT_SETTINGS }
     this.saveToDisk()
     return this.getSettings()
+  }
+
+  // Phase 4 Customization Methods
+  public getCustomization(): CustomizationProfile {
+    return JSON.parse(JSON.stringify(this.db.customization))
+  }
+
+  public getAllThemes(): CustomizationProfile[] {
+    return [...BUILTIN_THEME_PRESETS, ...this.db.customThemes]
+  }
+
+  public updateCustomization(partial: Partial<CustomizationProfile>): CustomizationProfile {
+    this.db.customization = this.mergeCustomization({
+      ...this.db.customization,
+      ...partial,
+      appearance: {
+        ...this.db.customization.appearance,
+        ...(partial.appearance || {})
+      },
+      taskbar: {
+        ...this.db.customization.taskbar,
+        ...(partial.taskbar || {})
+      },
+      tabs: {
+        ...this.db.customization.tabs,
+        ...(partial.tabs || {})
+      },
+      searchBar: {
+        ...this.db.customization.searchBar,
+        ...(partial.searchBar || {})
+      },
+      sounds: {
+        ...this.db.customization.sounds,
+        ...(partial.sounds || {}),
+        events: {
+          ...this.db.customization.sounds.events,
+          ...(partial.sounds?.events || {})
+        }
+      }
+    })
+    this.db.settings.accentColor = this.db.customization.appearance.accentPrimary
+    this.saveToDisk()
+    return this.getCustomization()
+  }
+
+  public applyThemePreset(presetId: string): CustomizationProfile {
+    const all = this.getAllThemes()
+    const found = all.find((t) => t.id === presetId)
+    if (found) {
+      // Preserve current user sound preferences & custom CSS unless preset overrides
+      const currentSounds = this.db.customization.sounds
+      this.db.customization = this.mergeCustomization({
+        ...JSON.parse(JSON.stringify(found)),
+        sounds: currentSounds
+      })
+      this.db.settings.accentColor = this.db.customization.appearance.accentPrimary
+      this.saveToDisk()
+    }
+    return this.getCustomization()
+  }
+
+  public saveCustomTheme(name: string): CustomizationProfile {
+    const cleanName = name.trim() || `Custom Theme ${this.db.customThemes.length + 1}`
+    const theme: CustomizationProfile = {
+      ...this.getCustomization(),
+      id: `custom-${randomUUID().slice(0, 8)}`,
+      name: cleanName,
+      isBuiltIn: false
+    }
+    this.db.customThemes.push(theme)
+    this.db.customization.id = theme.id
+    this.db.customization.name = theme.name
+    this.saveToDisk()
+    return theme
+  }
+
+  public deleteCustomTheme(themeId: string): void {
+    this.db.customThemes = this.db.customThemes.filter((t) => t.id !== themeId)
+    if (this.db.customization.id === themeId) {
+      this.db.customization = JSON.parse(JSON.stringify(KINETIC_DARK_PRESET))
+    }
+    this.saveToDisk()
+  }
+
+  public importCustomizationJson(jsonString: string): CustomizationProfile {
+    const parsed = JSON.parse(jsonString) as Partial<CustomizationProfile>
+    const merged = this.mergeCustomization({
+      ...parsed,
+      id: `imported-${randomUUID().slice(0, 6)}`,
+      name: parsed.name ? `${parsed.name} (Imported)` : 'Imported Profile',
+      isBuiltIn: false
+    })
+    this.db.customThemes.push(merged)
+    this.db.customization = JSON.parse(JSON.stringify(merged))
+    this.db.settings.accentColor = this.db.customization.appearance.accentPrimary
+    this.saveToDisk()
+    return this.getCustomization()
+  }
+
+  public resetCustomization(): CustomizationProfile {
+    this.db.customization = JSON.parse(JSON.stringify(KINETIC_DARK_PRESET))
+    this.db.settings.accentColor = KINETIC_DARK_PRESET.appearance.accentPrimary
+    this.saveToDisk()
+    return this.getCustomization()
   }
 
   public getHistory(profileId?: string): HistoryEntry[] {
@@ -377,7 +515,6 @@ export class SettingsStorage {
     return this.getBookmarkFolders()
   }
 
-  // Quick Links (New Tab Speed Dial)
   public getQuickLinks(): QuickLinkItem[] {
     return [...this.db.quickLinks]
   }

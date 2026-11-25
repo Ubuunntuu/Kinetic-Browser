@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { BrowserSettings, BrowserStatePayload, KineticAPI } from '../shared/types'
+import {
+  BrowserSettings,
+  BrowserStatePayload,
+  CustomizationProfile,
+  KineticAPI,
+  TabCustomStyle
+} from '../shared/types'
 
 const kineticApi: KineticAPI = {
   createTab: (url?: string, options?: { isPrivate?: boolean }) =>
@@ -9,6 +15,8 @@ const kineticApi: KineticAPI = {
   duplicateTab: (tabId: string) => ipcRenderer.invoke('kinetic:duplicate-tab', tabId),
   togglePinTab: (tabId: string) => ipcRenderer.invoke('kinetic:toggle-pin-tab', tabId),
   toggleMuteTab: (tabId: string) => ipcRenderer.invoke('kinetic:toggle-mute-tab', tabId),
+  updateTabCustomStyle: (tabId: string, style: TabCustomStyle) =>
+    ipcRenderer.invoke('kinetic:update-tab-style', tabId, style),
 
   navigate: (input: string) => ipcRenderer.invoke('kinetic:navigate', input),
   goBack: () => ipcRenderer.invoke('kinetic:go-back'),
@@ -39,6 +47,17 @@ const kineticApi: KineticAPI = {
     ipcRenderer.invoke('kinetic:create-profile', name, color),
   switchProfile: (profileId: string) => ipcRenderer.invoke('kinetic:switch-profile', profileId),
   deleteProfile: (profileId: string) => ipcRenderer.invoke('kinetic:delete-profile', profileId),
+
+  updateCustomization: (partial: Partial<CustomizationProfile>) =>
+    ipcRenderer.invoke('kinetic:update-customization', partial),
+  applyThemePreset: (presetId: string) =>
+    ipcRenderer.invoke('kinetic:apply-theme-preset', presetId),
+  saveCustomTheme: (name: string) => ipcRenderer.invoke('kinetic:save-custom-theme', name),
+  deleteCustomTheme: (themeId: string) =>
+    ipcRenderer.invoke('kinetic:delete-custom-theme', themeId),
+  importCustomizationJson: (jsonString: string) =>
+    ipcRenderer.invoke('kinetic:import-customization-json', jsonString),
+  resetCustomization: () => ipcRenderer.invoke('kinetic:reset-customization'),
 
   setRightDrawerOpen: (isOpen: boolean, width?: number) =>
     ipcRenderer.invoke('kinetic:set-right-drawer', isOpen, width),

@@ -2,7 +2,7 @@ import { app, BaseWindow, ipcMain, WebContentsView } from 'electron'
 import { join } from 'path'
 import { BrowserManager } from './browser-manager'
 import { SettingsStorage } from './storage'
-import { BrowserSettings } from '../shared/types'
+import { BrowserSettings, CustomizationProfile, TabCustomStyle } from '../shared/types'
 
 let mainWindow: BaseWindow | null = null
 let browserManager: BrowserManager | null = null
@@ -12,10 +12,10 @@ function createBrowserWindow(): void {
   storage = new SettingsStorage()
 
   mainWindow = new BaseWindow({
-    width: 1480,
-    height: 940,
-    minWidth: 940,
-    minHeight: 620,
+    width: 1500,
+    height: 950,
+    minWidth: 960,
+    minHeight: 640,
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#090a0f',
@@ -85,6 +85,10 @@ function registerIpcHandlers(): void {
     browserManager?.toggleMuteTab(tabId)
   })
 
+  ipcMain.handle('kinetic:update-tab-style', (_e, tabId: string, style: TabCustomStyle) => {
+    browserManager?.updateTabCustomStyle(tabId, style)
+  })
+
   ipcMain.handle('kinetic:navigate', (_e, input: string) => {
     browserManager?.navigateActiveTab(input)
   })
@@ -138,7 +142,7 @@ function registerIpcHandlers(): void {
     return browserManager?.createBookmarkFolder(folderName)
   })
 
-  // Quick Links (New Tab Speed Dial)
+  // Quick Links
   ipcMain.handle('kinetic:add-quick-link', (_e, data: { title: string; url: string }) => {
     return browserManager?.addQuickLink(data)
   })
@@ -179,6 +183,34 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('kinetic:delete-profile', (_e, profileId: string) => {
     browserManager?.deleteProfile(profileId)
+  })
+
+  // Phase 4: Extreme Customization Engine
+  ipcMain.handle(
+    'kinetic:update-customization',
+    (_e, partial: Partial<CustomizationProfile>) => {
+      return browserManager?.updateCustomization(partial)
+    }
+  )
+
+  ipcMain.handle('kinetic:apply-theme-preset', (_e, presetId: string) => {
+    return browserManager?.applyThemePreset(presetId)
+  })
+
+  ipcMain.handle('kinetic:save-custom-theme', (_e, name: string) => {
+    return browserManager?.saveCustomTheme(name)
+  })
+
+  ipcMain.handle('kinetic:delete-custom-theme', (_e, themeId: string) => {
+    browserManager?.deleteCustomTheme(themeId)
+  })
+
+  ipcMain.handle('kinetic:import-customization-json', (_e, jsonString: string) => {
+    return browserManager?.importCustomizationJson(jsonString)
+  })
+
+  ipcMain.handle('kinetic:reset-customization', () => {
+    return browserManager?.resetCustomization()
   })
 
   // Layout & Settings

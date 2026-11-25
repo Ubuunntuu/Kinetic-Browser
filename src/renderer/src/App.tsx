@@ -28,25 +28,57 @@ import {
   Pause,
   Play,
   FolderPlus,
-  Search
+  Search,
+  Palette,
+  RotateCcw
 } from 'lucide-react'
 import {
   BookmarkItem,
   BrowserSettings,
   BrowserStatePayload,
+  BUILTIN_THEME_PRESETS,
+  CustomizationProfile,
   DEFAULT_SETTINGS,
   DownloadEntry,
   DrawerPanelId,
   HistoryEntry,
+  KINETIC_DARK_PRESET,
   KINETIC_NEWTAB_URL,
   QuickLinkItem,
   SEARCH_ENGINES,
   SearchEngineId,
+  SoundEventId,
+  SoundPackId,
   TabState,
   UserProfile
 } from '../../shared/types'
+import { soundEngine } from './utils/sound-engine'
 
-const ACCENT_PRESETS = ['#00f0ff', '#ff2a6d', '#05d550', '#b537f2', '#ff8a00', '#3b82f6']
+type CustomizeTabId =
+  | 'themes'
+  | 'appearance'
+  | 'taskbar'
+  | 'tabs'
+  | 'searchbar'
+  | 'sounds'
+  | 'css'
+
+const FONT_OPTIONS = [
+  { label: 'Segoe UI (Modern Default)', value: "'Segoe UI', system-ui, sans-serif" },
+  { label: 'Inter / Sans', value: "'Inter', 'Segoe UI', sans-serif" },
+  { label: 'Consolas / Developer Mono', value: "'Consolas', 'Courier New', monospace" },
+  { label: 'Trebuchet / Geometric', value: "'Trebuchet MS', sans-serif" },
+  { label: 'Georgia / Editorial Serif', value: "'Georgia', serif" }
+]
+
+const SOUND_EVENT_LABELS: Record<SoundEventId, string> = {
+  click: 'UI Button Clicks',
+  tabOpen: 'Tab Opened',
+  tabClose: 'Tab Closed',
+  tabSwitch: 'Tab Switched',
+  navigate: 'Page Navigation',
+  download: 'Download Triggered'
+}
 
 function getSiteFaviconUrl(siteUrl: string, size: number = 64): string {
   try {
@@ -69,6 +101,9 @@ export default function App(): JSX.Element {
   const [tabs, setTabs] = useState<TabState[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [settings, setSettings] = useState<BrowserSettings>(DEFAULT_SETTINGS)
+  const [custom, setCustom] = useState<CustomizationProfile>(KINETIC_DARK_PRESET)
+  const [savedThemes, setSavedThemes] = useState<CustomizationProfile[]>(BUILTIN_THEME_PRESETS)
+
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([])
   const [bookmarkFolders, setBookmarkFolders] = useState<string[]>(['Bookmarks Bar'])
@@ -81,19 +116,28 @@ export default function App(): JSX.Element {
   const [newTabSearchQuery, setNewTabSearchQuery] = useState<string>('')
   const [isAddressFocused, setIsAddressFocused] = useState<boolean>(false)
   const [activeDrawer, setActiveDrawer] = useState<DrawerPanelId>('none')
+  const [customizeSubTab, setCustomizeSubTab] = useState<CustomizeTabId>('themes')
   const [clockNow, setClockNow] = useState<Date>(new Date())
 
-  // Custom Quick Link Form (New Tab Studio)
+  // Customization Studio local buffers
+  const [customThemeNameInput, setCustomThemeNameInput] = useState<string>('')
+  const [importJsonInput, setImportJsonInput] = useState<string>('')
+  const [cssDraft, setCssDraft] = useState<string>('')
+  const [cssError, setCssError] = useState<string>('')
+
+  // Per-Tab Individual Override Form
+  const [tabCustomTitleDraft, setTabCustomTitleDraft] = useState<string>('')
+  const [tabCustomColorDraft, setTabCustomColorDraft] = useState<string>('#00f0ff')
+  const [tabCustomBgDraft, setTabCustomBgDraft] = useState<string>('#202436')
+
+  // Quick Link & Bookmark Forms
   const [isAddingQuickLink, setIsAddingQuickLink] = useState<boolean>(false)
   const [customQuickTitle, setCustomQuickTitle] = useState<string>('')
   const [customQuickUrl, setCustomQuickUrl] = useState<string>('')
-
-  // Custom Bookmark Form (Bookmarks Manager)
   const [customBmTitle, setCustomBmTitle] = useState<string>('')
   const [customBmUrl, setCustomBmUrl] = useState<string>('')
   const [customBmFolder, setCustomBmFolder] = useState<string>('Bookmarks Bar')
 
-  // Panel Filters & Forms
   const [historySearch, setHistorySearch] = useState<string>('')
   const [selectedFolder, setSelectedFolder] = useState<string>('ALL')
   const [newFolderInput, setNewFolderInput] = useState<string>('')
@@ -114,12 +158,71 @@ export default function App(): JSX.Element {
     return () => clearInterval(timer)
   }, [])
 
+  // Apply 40+ CSS Custom Properties & Live Custom CSS Sheet whenever CustomizationProfile updates
+  useEffect(() => {
+    const root = document.documentElement
+    const { appearance, taskbar, tabs: tabCfg, searchBar } = custom
+
+    root.style.setProperty('--kb-bg-primary', appearance.bgPrimary)
+    root.style.setProperty('--kb-bg-elevated', appearance.bgElevated)
+    root.style.setProperty('--kb-text-primary', appearance.textPrimary)
+    root.style.setProperty('--kb-text-secondary', appearance.textSecondary)
+    root.style.setProperty('--kb-accent', appearance.accentPrimary)
+    root.style.setProperty('--kb-accent-secondary', appearance.accentSecondary)
+    root.style.setProperty('--kb-border', appearance.borderColor)
+    root.style.setProperty('--kb-border-width', `${appearance.borderWidth}px`)
+    root.style.setProperty('--kb-radius', `${appearance.borderRadius}px`)
+    root.style.setProperty('--kb-glow-intensity', `${appearance.glowIntensity}`)
+    root.style.setProperty('--kb-font-family', appearance.fontFamily)
+    root.style.setProperty('--kb-font-size', `${appearance.fontSize}px`)
+
+    root.style.setProperty('--kb-taskbar-height', `${taskbar.height}px`)
+    root.style.setProperty('--kb-taskbar-bg', taskbar.bgColor)
+    root.style.setProperty('--kb-btn-size', `${taskbar.buttonSize}px`)
+    root.style.setProperty('--kb-btn-spacing', `${taskbar.buttonSpacing}px`)
+    root.style.setProperty('--kb-btn-radius', `${taskbar.buttonRadius}px`)
+
+    root.style.setProperty('--kb-tab-width', `${tabCfg.tabWidth}px`)
+    root.style.setProperty('--kb-tab-height', `${tabCfg.tabHeight}px`)
+    root.style.setProperty('--kb-tab-spacing', `${tabCfg.tabSpacing}px`)
+    root.style.setProperty('--kb-tab-radius', `${tabCfg.tabRadius}px`)
+    root.style.setProperty('--kb-tab-active-bg', tabCfg.activeTabBg)
+    root.style.setProperty('--kb-tab-inactive-bg', tabCfg.inactiveTabBg)
+    root.style.setProperty('--kb-tab-active-border', tabCfg.activeTabBorderColor)
+    root.style.setProperty('--kb-vtab-width', `${tabCfg.verticalSidebarWidth}px`)
+
+    root.style.setProperty('--kb-search-width', `${searchBar.widthPercent}%`)
+    root.style.setProperty('--kb-search-height', `${searchBar.height}px`)
+    root.style.setProperty('--kb-search-bg', searchBar.bgColor)
+    root.style.setProperty('--kb-search-text', searchBar.textColor)
+    root.style.setProperty('--kb-search-border', searchBar.borderColor)
+    root.style.setProperty('--kb-search-radius', `${searchBar.borderRadius}px`)
+    root.style.setProperty('--kb-search-border-width', `${searchBar.borderWidth}px`)
+    root.style.setProperty('--kb-search-padding', `${searchBar.paddingHorizontal}px`)
+
+    // Inject User Custom CSS safely
+    let styleTag = document.getElementById('kinetic-user-custom-css') as HTMLStyleElement | null
+    if (!styleTag) {
+      styleTag = document.createElement('style')
+      styleTag.id = 'kinetic-user-custom-css'
+      document.head.appendChild(styleTag)
+    }
+    styleTag.textContent = custom.customCss || ''
+  }, [custom])
+
   useEffect(() => {
     const applyState = (payload: BrowserStatePayload): void => {
       if (!payload) return
       setTabs(payload.tabs)
       setActiveTabId(payload.activeTabId)
       setSettings(payload.settings)
+      if (payload.customization) {
+        setCustom(payload.customization)
+        setCssDraft(payload.customization.customCss || '')
+      }
+      if (payload.savedThemes) {
+        setSavedThemes(payload.savedThemes)
+      }
       setHistory(payload.history || [])
       setBookmarks(payload.bookmarks || [])
       setBookmarkFolders(payload.bookmarkFolders || ['Bookmarks Bar'])
@@ -128,9 +231,6 @@ export default function App(): JSX.Element {
       setProfiles(payload.profiles || [])
       setActiveProfileId(payload.activeProfileId || 'default')
 
-      const effectiveChromeHeight = 82 + (payload.settings.showBookmarksBar ? 30 : 0)
-      document.documentElement.style.setProperty('--kb-accent', payload.settings.accentColor)
-      document.documentElement.style.setProperty('--kb-chrome-height', `${effectiveChromeHeight}px`)
       document.documentElement.style.setProperty(
         '--kb-drawer-width',
         `${payload.settings.sidebarOpenWidth}px`
@@ -156,21 +256,52 @@ export default function App(): JSX.Element {
     if (!isAddressFocused && activeTab) {
       setAddressInput(activeTab.url === KINETIC_NEWTAB_URL ? '' : activeTab.url)
     }
+    if (activeTab) {
+      setTabCustomTitleDraft(activeTab.customStyle?.customTitle || '')
+      setTabCustomColorDraft(
+        activeTab.customStyle?.customColor || custom.tabs.activeTabBorderColor
+      )
+      setTabCustomBgDraft(activeTab.customStyle?.customBg || custom.tabs.activeTabBg)
+    }
   }, [activeTab?.url, activeTabId, isAddressFocused])
 
+  const triggerSound = (event: SoundEventId): void => {
+    soundEngine.play(event, custom.sounds)
+  }
+
   const toggleDrawerPanel = (panel: DrawerPanelId): void => {
+    triggerSound('click')
     const next = activeDrawer === panel ? 'none' : panel
     setActiveDrawer(next)
     window.kinetic.setRightDrawerOpen(next !== 'none', settings.sidebarOpenWidth)
   }
 
   const openDrawerPanel = (panel: DrawerPanelId): void => {
+    triggerSound('click')
     setActiveDrawer(panel)
     window.kinetic.setRightDrawerOpen(true, settings.sidebarOpenWidth)
   }
 
+  const handleCreateTab = (url?: string, isPrivate?: boolean): void => {
+    triggerSound('tabOpen')
+    window.kinetic.createTab(url, { isPrivate })
+  }
+
+  const handleCloseTab = (tabId: string): void => {
+    triggerSound('tabClose')
+    window.kinetic.closeTab(tabId)
+  }
+
+  const handleSwitchTab = (tabId: string): void => {
+    if (tabId !== activeTabId) {
+      triggerSound('tabSwitch')
+      window.kinetic.switchTab(tabId)
+    }
+  }
+
   const handleNavigateSubmit = (e: React.FormEvent): void => {
     e.preventDefault()
+    triggerSound('navigate')
     window.kinetic.navigate(addressInput)
     ;(document.activeElement as HTMLElement | null)?.blur()
   }
@@ -178,6 +309,7 @@ export default function App(): JSX.Element {
   const handleNewTabSearchSubmit = (e: React.FormEvent): void => {
     e.preventDefault()
     if (!newTabSearchQuery.trim()) return
+    triggerSound('navigate')
     window.kinetic.navigate(newTabSearchQuery)
     setNewTabSearchQuery('')
   }
@@ -185,6 +317,7 @@ export default function App(): JSX.Element {
   const handleAddQuickLinkSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     if (!customQuickUrl.trim()) return
+    triggerSound('click')
     await window.kinetic.addQuickLink({
       title: customQuickTitle.trim() || customQuickUrl.trim(),
       url: customQuickUrl.trim()
@@ -197,6 +330,7 @@ export default function App(): JSX.Element {
   const handleAddCustomBookmarkSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     if (!customBmUrl.trim()) return
+    triggerSound('click')
     await window.kinetic.addBookmark({
       title: customBmTitle.trim() || customBmUrl.trim(),
       url: customBmUrl.trim(),
@@ -208,6 +342,7 @@ export default function App(): JSX.Element {
 
   const handleToggleBookmarkActiveTab = async (): Promise<void> => {
     if (!activeTab || isNewTabActive) return
+    triggerSound('click')
     if (currentBookmark) {
       await window.kinetic.removeBookmark(currentBookmark.id)
     } else {
@@ -218,6 +353,46 @@ export default function App(): JSX.Element {
         folder: 'Bookmarks Bar'
       })
     }
+  }
+
+  const handleApplyLiveCss = async (): Promise<void> => {
+    if (cssDraft.includes('</style>') || cssDraft.includes('<script')) {
+      setCssError('Invalid characters detected in CSS block.')
+      return
+    }
+    setCssError('')
+    await window.kinetic.updateCustomization({ customCss: cssDraft })
+  }
+
+  const handleCustomSoundUpload = (
+    eventKey: SoundEventId,
+    e: React.ChangeEvent<HTMLInputElement>
+  ): void => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      window.kinetic.updateCustomization({
+        sounds: {
+          ...custom.sounds,
+          events: {
+            ...custom.sounds.events,
+            [eventKey]: {
+              ...custom.sounds.events[eventKey],
+              customAudioDataUrl: dataUrl
+            }
+          }
+        }
+      })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleExportProfileJson = (): void => {
+    const json = JSON.stringify(custom, null, 2)
+    navigator.clipboard.writeText(json)
+    setImportJsonInput(json)
   }
 
   const handleCreateFolder = async (e: React.FormEvent): Promise<void> => {
@@ -254,80 +429,345 @@ export default function App(): JSX.Element {
       ? bookmarks
       : bookmarks.filter((b) => b.folder === selectedFolder)
 
-  return (
-    <div className="kb-shell">
-      {/* TOP BROWSER CHROME */}
-      <header className="kb-chrome">
-        {/* ROW 1: CLEAN TAB STRIP */}
-        <div className="kb-tabstrip-row">
-          <div className="kb-tabs-container">
-            {tabs.map((tab) => {
-              const isActive = tab.id === activeTabId
-              return (
-                <div
-                  key={tab.id}
-                  className={`kb-tab ${isActive ? 'active' : ''} ${tab.isPinned ? 'pinned' : ''} ${tab.isPrivate ? 'private' : ''}`}
-                  onClick={() => window.kinetic.switchTab(tab.id)}
-                  onAuxClick={(e) => {
-                    if (e.button === 1) window.kinetic.closeTab(tab.id)
-                  }}
-                  title={`${tab.title}${tab.url !== KINETIC_NEWTAB_URL ? `\n${tab.url}` : ''}${tab.isPrivate ? '\n[Private Session]' : ''}`}
-                >
-                  {tab.isPrivate ? (
-                    <EyeOff size={13} color="#d896ff" style={{ flexShrink: 0 }} />
-                  ) : tab.favicon ? (
-                    <img src={tab.favicon} alt="" className="kb-tab-favicon" />
-                  ) : (
-                    <Globe size={13} style={{ flexShrink: 0, opacity: 0.7 }} />
-                  )}
+  const renderTabItem = (tab: TabState): JSX.Element => {
+    const isActive = tab.id === activeTabId
+    const displayTitle = tab.customStyle?.customTitle?.trim() || tab.title
+    const tabInlineStyle: React.CSSProperties = {}
+    if (tab.customStyle?.customBg) {
+      tabInlineStyle.backgroundColor = tab.customStyle.customBg
+    }
+    if (tab.customStyle?.customColor) {
+      tabInlineStyle.borderColor = tab.customStyle.customColor
+    }
 
-                  {!tab.isPinned && (
-                    <>
-                      {tab.isPrivate && <span className="kb-private-tag">PRIV</span>}
-                      <span className="kb-tab-title">{tab.title}</span>
-                    </>
-                  )}
+    return (
+      <div
+        key={tab.id}
+        style={tabInlineStyle}
+        className={`kb-tab ${isActive ? 'active' : ''} ${tab.isPinned ? 'pinned' : ''} ${tab.isPrivate ? 'private' : ''}`}
+        onClick={() => handleSwitchTab(tab.id)}
+        onAuxClick={(e) => {
+          if (e.button === 1) handleCloseTab(tab.id)
+        }}
+        title={`${displayTitle}${tab.url !== KINETIC_NEWTAB_URL ? `\n${tab.url}` : ''}${tab.isPrivate ? '\n[Private Session]' : ''}`}
+      >
+        {tab.isPrivate ? (
+          <EyeOff size={13} color="#d896ff" style={{ flexShrink: 0 }} />
+        ) : tab.favicon ? (
+          <img src={tab.favicon} alt="" className="kb-tab-favicon" />
+        ) : (
+          <Globe
+            size={13}
+            style={{
+              flexShrink: 0,
+              opacity: 0.75,
+              color: tab.customStyle?.customColor || undefined
+            }}
+          />
+        )}
 
-                  {(tab.isAudioPlaying || tab.isMuted) && (
-                    <button
-                      type="button"
-                      className="kb-tab-action-btn"
-                      title={tab.isMuted ? 'Unmute Tab' : 'Mute Tab'}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        window.kinetic.toggleMuteTab(tab.id)
-                      }}
-                    >
-                      {tab.isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
-                    </button>
-                  )}
+        {!tab.isPinned && (
+          <>
+            {tab.isPrivate && <span className="kb-private-tag">PRIV</span>}
+            <span
+              className="kb-tab-title"
+              style={
+                tab.customStyle?.customColor ? { color: tab.customStyle.customColor } : undefined
+              }
+            >
+              {displayTitle}
+            </span>
+          </>
+        )}
 
-                  {!tab.isPinned && (
-                    <button
-                      type="button"
-                      className="kb-tab-action-btn"
-                      title="Close Tab"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        window.kinetic.closeTab(tab.id)
-                      }}
-                    >
-                      <X size={13} />
-                    </button>
-                  )}
-                </div>
-              )
-            })}
+        {(tab.isAudioPlaying || tab.isMuted) && (
+          <button
+            type="button"
+            className="kb-tab-action-btn"
+            title={tab.isMuted ? 'Unmute Tab' : 'Mute Tab'}
+            onClick={(e) => {
+              e.stopPropagation()
+              window.kinetic.toggleMuteTab(tab.id)
+            }}
+          >
+            {tab.isMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+          </button>
+        )}
 
+        {!tab.isPinned && (
+          <button
+            type="button"
+            className="kb-tab-action-btn"
+            title="Close Tab"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleCloseTab(tab.id)
+            }}
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  const renderNavbarRow = (isBottom = false): JSX.Element => (
+    <div className={`kb-navbar-row ${isBottom ? 'bottom' : ''}`}>
+      <div className="kb-nav-group">
+        <button
+          type="button"
+          className="kb-icon-btn"
+          disabled={!activeTab?.canGoBack}
+          onClick={() => {
+            triggerSound('click')
+            window.kinetic.goBack()
+          }}
+          title="Back"
+        >
+          <ArrowLeft size={16} />
+        </button>
+        <button
+          type="button"
+          className="kb-icon-btn"
+          disabled={!activeTab?.canGoForward}
+          onClick={() => {
+            triggerSound('click')
+            window.kinetic.goForward()
+          }}
+          title="Forward"
+        >
+          <ArrowRight size={16} />
+        </button>
+        <button
+          type="button"
+          className="kb-icon-btn"
+          onClick={() => {
+            triggerSound('click')
+            activeTab?.isLoading ? window.kinetic.stop() : window.kinetic.reload()
+          }}
+          title={activeTab?.isLoading ? 'Stop Loading' : 'Reload Page'}
+        >
+          {activeTab?.isLoading ? <X size={16} /> : <RotateCw size={15} />}
+        </button>
+        {custom.taskbar.showHomeButton && (
+          <button
+            type="button"
+            className="kb-icon-btn"
+            onClick={() => {
+              triggerSound('navigate')
+              window.kinetic.goHome()
+            }}
+            title="Home / New Tab Studio"
+          >
+            <Home size={15} />
+          </button>
+        )}
+      </div>
+
+      {/* Customizable Search / Address Bar Slot */}
+      <div className={`kb-omnibox-slot align-${custom.searchBar.alignment}`}>
+        <form className="kb-omnibox-form" onSubmit={handleNavigateSubmit}>
+          {custom.searchBar.showSecurityBadge &&
+            (activeTab?.isPrivate ? (
+              <span className="kb-security-badge private" title="Private Tab">
+                <EyeOff size={12} />
+                <span>PRIVATE</span>
+              </span>
+            ) : isNewTabActive ? (
+              <span
+                className="kb-security-badge neutral"
+                title={`Active Search Engine: ${currentEngine.name}`}
+              >
+                <Search size={12} />
+                <span>{currentEngine.name.toUpperCase()}</span>
+              </span>
+            ) : activeTab?.hasCertError ? (
+              <span className="kb-security-badge error" title="Invalid TLS Certificate Blocked">
+                <ShieldAlert size={13} />
+                <span>CERT ERROR</span>
+              </span>
+            ) : activeTab?.isSecure ? (
+              <span className="kb-security-badge secure" title="Encrypted HTTPS Connection">
+                <ShieldCheck size={13} />
+                <span>HTTPS</span>
+              </span>
+            ) : (
+              <span className="kb-security-badge insecure" title="Unencrypted Connection">
+                <ShieldAlert size={13} />
+                <span>HTTP</span>
+              </span>
+            ))}
+
+          <input
+            type="text"
+            className="kb-omnibox-input"
+            value={addressInput}
+            onFocus={(e) => {
+              setIsAddressFocused(true)
+              e.currentTarget.select()
+            }}
+            onBlur={() => setIsAddressFocused(false)}
+            onChange={(e) => setAddressInput(e.target.value)}
+            placeholder={`Search with ${currentEngine.name} or enter web address...`}
+            spellCheck={false}
+          />
+
+          {!isNewTabActive && (
             <button
               type="button"
-              className="kb-newtab-btn"
-              title="New Tab"
-              onClick={() => window.kinetic.createTab()}
+              className={`kb-star-btn ${currentBookmark ? 'bookmarked' : ''}`}
+              onClick={handleToggleBookmarkActiveTab}
+              title={currentBookmark ? 'Remove Bookmark' : 'Bookmark This Page'}
             >
-              <Plus size={15} />
+              <Star size={15} fill={currentBookmark ? 'currentColor' : 'none'} />
             </button>
-          </div>
+          )}
+        </form>
+      </div>
+
+      <div className="kb-nav-group">
+        {activeTab && custom.taskbar.showPinButton && (
+          <button
+            type="button"
+            className={`kb-icon-btn ${activeTab.isPinned ? 'active' : ''}`}
+            onClick={() => {
+              triggerSound('click')
+              window.kinetic.togglePinTab(activeTab.id)
+            }}
+            title={activeTab.isPinned ? 'Unpin Tab' : 'Pin Tab'}
+          >
+            <Pin size={15} />
+          </button>
+        )}
+
+        {activeTab && custom.taskbar.showDuplicateButton && (
+          <button
+            type="button"
+            className="kb-icon-btn"
+            onClick={() => {
+              triggerSound('tabOpen')
+              window.kinetic.duplicateTab(activeTab.id)
+            }}
+            title="Duplicate Tab"
+          >
+            <Copy size={15} />
+          </button>
+        )}
+
+        {/* Extreme Customization Studio Trigger */}
+        <button
+          type="button"
+          className={`kb-icon-btn ${activeDrawer === 'customize' ? 'active' : ''}`}
+          onClick={() => toggleDrawerPanel('customize')}
+          title="Extreme Customization Studio (Themes, Taskbar, Tabs, Sounds, CSS)"
+        >
+          <Palette size={15} />
+        </button>
+
+        {custom.taskbar.showPrivateButton && (
+          <button
+            type="button"
+            className="kb-icon-btn"
+            onClick={() => handleCreateTab(undefined, true)}
+            title="New Private Tab"
+          >
+            <EyeOff size={15} />
+          </button>
+        )}
+
+        {custom.taskbar.showBookmarksButton && (
+          <button
+            type="button"
+            className={`kb-icon-btn ${activeDrawer === 'bookmarks' ? 'active' : ''}`}
+            onClick={() => toggleDrawerPanel('bookmarks')}
+            title="Bookmarks"
+          >
+            <Bookmark size={15} />
+          </button>
+        )}
+
+        {custom.taskbar.showHistoryButton && (
+          <button
+            type="button"
+            className={`kb-icon-btn ${activeDrawer === 'history' ? 'active' : ''}`}
+            onClick={() => toggleDrawerPanel('history')}
+            title="History"
+          >
+            <History size={15} />
+          </button>
+        )}
+
+        {custom.taskbar.showDownloadsButton && (
+          <button
+            type="button"
+            className={`kb-icon-btn ${activeDrawer === 'downloads' ? 'active' : ''}`}
+            onClick={() => toggleDrawerPanel('downloads')}
+            title="Downloads"
+          >
+            <Download size={15} />
+            {hasActiveDownloads && <span className="kb-badge-dot" />}
+          </button>
+        )}
+
+        {custom.taskbar.showProfilesButton && (
+          <button
+            type="button"
+            className={`kb-icon-btn ${activeDrawer === 'profiles' ? 'active' : ''}`}
+            onClick={() => toggleDrawerPanel('profiles')}
+            title="User Profiles"
+          >
+            <Users size={15} />
+          </button>
+        )}
+
+        {custom.taskbar.showDevToolsButton && (
+          <button
+            type="button"
+            className="kb-icon-btn"
+            onClick={() => window.kinetic.toggleDevTools()}
+            title="Developer Tools"
+          >
+            <Terminal size={15} />
+          </button>
+        )}
+
+        <button
+          type="button"
+          className={`kb-icon-btn ${activeDrawer === 'settings' ? 'active' : ''}`}
+          onClick={() => toggleDrawerPanel('settings')}
+          title="General Settings"
+        >
+          <Settings size={16} />
+        </button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div
+      className={`kb-shell ${!custom.appearance.enableAnimations ? 'no-animations' : ''} ${custom.appearance.rgbCycleMode ? 'rgb-mode' : ''}`}
+    >
+      {/* TOP CHROME */}
+      <header>
+        {/* Top Tab Strip (or Compact Window Drag Bar when Vertical Tabs are enabled) */}
+        <div className="kb-tabstrip-row">
+          {custom.tabs.orientation === 'horizontal' ? (
+            <div className="kb-tabs-container">
+              {tabs.map((tab) => renderTabItem(tab))}
+              <button
+                type="button"
+                className="kb-newtab-btn"
+                title="New Tab"
+                onClick={() => handleCreateTab()}
+              >
+                <Plus size={15} />
+              </button>
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: 'var(--kb-text-secondary)', paddingLeft: 6 }}>
+              VERTICAL TABS MODE • {activeTab?.customStyle?.customTitle || activeTab?.title || 'Kinetic'}
+            </div>
+          )}
 
           <div className="kb-window-controls">
             <button
@@ -357,193 +797,10 @@ export default function App(): JSX.Element {
           </div>
         </div>
 
-        {/* ROW 2: NAVIGATION & OMNIBOX */}
-        <div className="kb-navbar-row">
-          <div className="kb-nav-group">
-            <button
-              type="button"
-              className="kb-icon-btn"
-              disabled={!activeTab?.canGoBack}
-              onClick={() => window.kinetic.goBack()}
-              title="Back"
-            >
-              <ArrowLeft size={16} />
-            </button>
-            <button
-              type="button"
-              className="kb-icon-btn"
-              disabled={!activeTab?.canGoForward}
-              onClick={() => window.kinetic.goForward()}
-              title="Forward"
-            >
-              <ArrowRight size={16} />
-            </button>
-            <button
-              type="button"
-              className="kb-icon-btn"
-              onClick={() =>
-                activeTab?.isLoading ? window.kinetic.stop() : window.kinetic.reload()
-              }
-              title={activeTab?.isLoading ? 'Stop Loading' : 'Reload Page'}
-            >
-              {activeTab?.isLoading ? <X size={16} /> : <RotateCw size={15} />}
-            </button>
-            <button
-              type="button"
-              className="kb-icon-btn"
-              onClick={() => window.kinetic.goHome()}
-              title="Home / New Tab Studio"
-            >
-              <Home size={15} />
-            </button>
-          </div>
+        {/* Render Taskbar at Top if configured */}
+        {custom.taskbar.position === 'top' && renderNavbarRow(false)}
 
-          <form className="kb-omnibox-form" onSubmit={handleNavigateSubmit}>
-            {activeTab?.isPrivate ? (
-              <span className="kb-security-badge private" title="Private Tab (No History Saved)">
-                <EyeOff size={12} />
-                <span>PRIVATE</span>
-              </span>
-            ) : isNewTabActive ? (
-              <span
-                className="kb-security-badge neutral"
-                title={`Active Search Engine: ${currentEngine.name}`}
-              >
-                <Search size={12} />
-                <span>{currentEngine.name.toUpperCase()}</span>
-              </span>
-            ) : activeTab?.hasCertError ? (
-              <span className="kb-security-badge error" title="Invalid TLS Certificate Blocked">
-                <ShieldAlert size={13} />
-                <span>CERT ERROR</span>
-              </span>
-            ) : activeTab?.isSecure ? (
-              <span className="kb-security-badge secure" title="Encrypted HTTPS Connection">
-                <ShieldCheck size={13} />
-                <span>HTTPS</span>
-              </span>
-            ) : (
-              <span className="kb-security-badge insecure" title="Unencrypted Connection">
-                <ShieldAlert size={13} />
-                <span>HTTP</span>
-              </span>
-            )}
-
-            <input
-              type="text"
-              className="kb-omnibox-input"
-              value={addressInput}
-              onFocus={(e) => {
-                setIsAddressFocused(true)
-                e.currentTarget.select()
-              }}
-              onBlur={() => setIsAddressFocused(false)}
-              onChange={(e) => setAddressInput(e.target.value)}
-              placeholder={`Search with ${currentEngine.name} or enter web address...`}
-              spellCheck={false}
-            />
-
-            {!isNewTabActive && (
-              <button
-                type="button"
-                className={`kb-star-btn ${currentBookmark ? 'bookmarked' : ''}`}
-                onClick={handleToggleBookmarkActiveTab}
-                title={currentBookmark ? 'Remove Bookmark' : 'Bookmark This Page'}
-              >
-                <Star size={15} fill={currentBookmark ? 'currentColor' : 'none'} />
-              </button>
-            )}
-          </form>
-
-          <div className="kb-nav-group">
-            {activeTab && (
-              <>
-                <button
-                  type="button"
-                  className={`kb-icon-btn ${activeTab.isPinned ? 'active' : ''}`}
-                  onClick={() => window.kinetic.togglePinTab(activeTab.id)}
-                  title={activeTab.isPinned ? 'Unpin Tab' : 'Pin Tab'}
-                >
-                  <Pin size={15} />
-                </button>
-                <button
-                  type="button"
-                  className="kb-icon-btn"
-                  onClick={() => window.kinetic.duplicateTab(activeTab.id)}
-                  title="Duplicate Tab"
-                >
-                  <Copy size={15} />
-                </button>
-              </>
-            )}
-
-            <button
-              type="button"
-              className="kb-icon-btn private-btn"
-              onClick={() => window.kinetic.createTab(undefined, { isPrivate: true })}
-              title="New Private Tab"
-            >
-              <EyeOff size={15} />
-            </button>
-
-            <button
-              type="button"
-              className={`kb-icon-btn ${activeDrawer === 'bookmarks' ? 'active' : ''}`}
-              onClick={() => toggleDrawerPanel('bookmarks')}
-              title="Bookmarks"
-            >
-              <Bookmark size={15} />
-            </button>
-
-            <button
-              type="button"
-              className={`kb-icon-btn ${activeDrawer === 'history' ? 'active' : ''}`}
-              onClick={() => toggleDrawerPanel('history')}
-              title="History"
-            >
-              <History size={15} />
-            </button>
-
-            <button
-              type="button"
-              className={`kb-icon-btn ${activeDrawer === 'downloads' ? 'active' : ''}`}
-              onClick={() => toggleDrawerPanel('downloads')}
-              title="Downloads"
-            >
-              <Download size={15} />
-              {hasActiveDownloads && <span className="kb-badge-dot" />}
-            </button>
-
-            <button
-              type="button"
-              className={`kb-icon-btn ${activeDrawer === 'profiles' ? 'active' : ''}`}
-              onClick={() => toggleDrawerPanel('profiles')}
-              title="User Profiles"
-            >
-              <Users size={15} />
-            </button>
-
-            <button
-              type="button"
-              className="kb-icon-btn"
-              onClick={() => window.kinetic.toggleDevTools()}
-              title="Developer Tools"
-            >
-              <Terminal size={15} />
-            </button>
-
-            <button
-              type="button"
-              className={`kb-icon-btn ${activeDrawer === 'settings' ? 'active' : ''}`}
-              onClick={() => toggleDrawerPanel('settings')}
-              title="Settings"
-            >
-              <Settings size={16} />
-            </button>
-          </div>
-        </div>
-
-        {/* ROW 3: BOOKMARKS BAR (YouTube, Steam, Discord + User Custom Bookmarks) */}
+        {/* Bookmarks Bar */}
         {settings.showBookmarksBar && (
           <div className="kb-bookmarks-bar">
             {bookmarks.map((bm) => {
@@ -553,9 +810,12 @@ export default function App(): JSX.Element {
                   key={bm.id}
                   type="button"
                   className="kb-bm-pill"
-                  onClick={() => window.kinetic.navigate(bm.url)}
+                  onClick={() => {
+                    triggerSound('navigate')
+                    window.kinetic.navigate(bm.url)
+                  }}
                   onAuxClick={(e) => {
-                    if (e.button === 1) window.kinetic.createTab(bm.url)
+                    if (e.button === 1) handleCreateTab(bm.url)
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault()
@@ -586,8 +846,23 @@ export default function App(): JSX.Element {
         )}
       </header>
 
-      {/* WORKSPACE AREA */}
+      {/* MAIN WORKSPACE */}
       <main className="kb-workspace">
+        {/* Left Vertical Tabs Sidebar when orientation === 'vertical' */}
+        {custom.tabs.orientation === 'vertical' && (
+          <aside className="kb-vertical-tabs-sidebar">
+            {tabs.map((tab) => renderTabItem(tab))}
+            <button
+              type="button"
+              className="kb-btn"
+              style={{ flex: '0 0 32px', marginTop: 4 }}
+              onClick={() => handleCreateTab()}
+            >
+              + New Tab
+            </button>
+          </aside>
+        )}
+
         {isNewTabActive ? (
           <section className="kb-newtab-studio">
             <div className="kb-newtab-inner">
@@ -605,7 +880,6 @@ export default function App(): JSX.Element {
                 </div>
               </div>
 
-              {/* Central New Tab Search Bar synced with Default Search Engine */}
               <form className="kb-newtab-search-form" onSubmit={handleNewTabSearchSubmit}>
                 <select
                   className="kb-engine-selector-pill"
@@ -638,15 +912,17 @@ export default function App(): JSX.Element {
                 </button>
               </form>
 
-              {/* Speed Dial Grid: Only YouTube, Steam, Discord + User Custom Shortcuts */}
               <div className="kb-speed-dial-grid">
                 {quickLinks.map((item) => (
                   <div
                     key={item.id}
                     className="kb-speed-card"
-                    onClick={() => window.kinetic.navigate(item.url)}
+                    onClick={() => {
+                      triggerSound('navigate')
+                      window.kinetic.navigate(item.url)
+                    }}
                     onAuxClick={(e) => {
-                      if (e.button === 1) window.kinetic.createTab(item.url)
+                      if (e.button === 1) handleCreateTab(item.url)
                     }}
                     title={item.url}
                   >
@@ -672,25 +948,18 @@ export default function App(): JSX.Element {
                   </div>
                 ))}
 
-                {/* + Add Custom Shortcut Button */}
                 <div
                   className="kb-speed-card add-card"
                   onClick={() => setIsAddingQuickLink(!isAddingQuickLink)}
                   title="Add Custom Shortcut to New Tab"
                 >
-                  <div
-                    className="kb-speed-icon-box"
-                    style={{ borderColor: 'rgba(0, 240, 255, 0.3)', color: 'var(--kb-accent)' }}
-                  >
+                  <div className="kb-speed-icon-box">
                     <Plus size={22} />
                   </div>
-                  <span className="kb-speed-label" style={{ color: 'var(--kb-accent)' }}>
-                    Add Shortcut
-                  </span>
+                  <span className="kb-speed-label">Add Shortcut</span>
                 </div>
               </div>
 
-              {/* Inline Add Custom Shortcut Form */}
               {isAddingQuickLink && (
                 <form className="kb-add-shortcut-box" onSubmit={handleAddQuickLinkSubmit}>
                   <input
@@ -734,10 +1003,13 @@ export default function App(): JSX.Element {
           <div className="kb-webview-placeholder" />
         )}
 
+        {/* RIGHT MULTI-PANEL DRAWER */}
         {activeDrawer !== 'none' && (
           <aside className="kb-settings-drawer">
             <div className="kb-drawer-header">
-              <span className="kb-drawer-title">{activeDrawer}</span>
+              <span className="kb-drawer-title">
+                {activeDrawer === 'customize' ? 'EXTREME CUSTOMIZATION ENGINE' : activeDrawer}
+              </span>
               <button
                 type="button"
                 className="kb-tab-action-btn"
@@ -748,9 +1020,962 @@ export default function App(): JSX.Element {
               </button>
             </div>
 
+            {/* =============================================================== */}
+            {/* PHASE 4: EXTREME CUSTOMIZATION STUDIO                           */}
+            {/* =============================================================== */}
+            {activeDrawer === 'customize' && (
+              <>
+                <div className="kb-subtab-strip">
+                  {(
+                    [
+                      ['themes', 'Themes'],
+                      ['appearance', 'Colors & Fonts'],
+                      ['taskbar', 'Taskbar'],
+                      ['tabs', 'Tabs'],
+                      ['searchbar', 'Search Bar'],
+                      ['sounds', 'Sounds'],
+                      ['css', 'Custom CSS']
+                    ] as [CustomizeTabId, string][]
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`kb-subtab-btn ${customizeSubTab === id ? 'active' : ''}`}
+                      onClick={() => {
+                        triggerSound('click')
+                        setCustomizeSubTab(id)
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* SUB-TAB 1: 10 PRESET THEMES & UNLIMITED PROFILES */}
+                {customizeSubTab === 'themes' && (
+                  <div className="kb-list-container">
+                    <span className="kb-setting-desc">
+                      Active Profile: <strong>{custom.name}</strong>. Switch instantly between 10
+                      built-in presets or save unlimited custom profiles.
+                    </span>
+
+                    <div className="kb-theme-grid">
+                      {savedThemes.map((theme) => (
+                        <div
+                          key={theme.id}
+                          className={`kb-theme-card ${custom.id === theme.id ? 'active' : ''}`}
+                          onClick={() => {
+                            triggerSound('click')
+                            window.kinetic.applyThemePreset(theme.id)
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span className="kb-card-title">{theme.name}</span>
+                            {!theme.isBuiltIn && (
+                              <button
+                                type="button"
+                                className="kb-tab-action-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  window.kinetic.deleteCustomTheme(theme.id)
+                                }}
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            )}
+                          </div>
+                          <div className="kb-theme-swatches">
+                            <span
+                              className="kb-theme-dot"
+                              style={{ background: theme.appearance.bgPrimary }}
+                              title="Primary Background"
+                            />
+                            <span
+                              className="kb-theme-dot"
+                              style={{ background: theme.appearance.bgElevated }}
+                              title="Surface"
+                            />
+                            <span
+                              className="kb-theme-dot"
+                              style={{ background: theme.appearance.accentPrimary }}
+                              title="Primary Accent"
+                            />
+                            <span
+                              className="kb-theme-dot"
+                              style={{ background: theme.appearance.accentSecondary }}
+                              title="Secondary Accent"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="kb-setting-group" style={{ marginTop: 8 }}>
+                      <label className="kb-setting-label">Save Current Look as Profile</label>
+                      <div className="kb-btn-row">
+                        <input
+                          type="text"
+                          className="kb-input"
+                          style={{ flex: 1 }}
+                          placeholder="Theme name (e.g. OLED Red)"
+                          value={customThemeNameInput}
+                          onChange={(e) => setCustomThemeNameInput(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          className="kb-btn primary"
+                          style={{ flex: '0 0 auto' }}
+                          onClick={async () => {
+                            await window.kinetic.saveCustomTheme(customThemeNameInput)
+                            setCustomThemeNameInput('')
+                          }}
+                        >
+                          Save Theme
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">Import / Export Profile JSON</label>
+                      <textarea
+                        className="kb-css-editor"
+                        style={{ height: 76 }}
+                        placeholder="Paste Customization JSON here to import..."
+                        value={importJsonInput}
+                        onChange={(e) => setImportJsonInput(e.target.value)}
+                      />
+                      <div className="kb-btn-row">
+                        <button
+                          type="button"
+                          className="kb-btn"
+                          onClick={handleExportProfileJson}
+                        >
+                          Copy Current JSON
+                        </button>
+                        <button
+                          type="button"
+                          className="kb-btn primary"
+                          onClick={() => {
+                            if (importJsonInput.trim()) {
+                              window.kinetic.importCustomizationJson(importJsonInput.trim())
+                            }
+                          }}
+                        >
+                          Import JSON
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="kb-btn danger"
+                      onClick={() => window.kinetic.resetCustomization()}
+                    >
+                      <RotateCcw size={12} style={{ marginRight: 6 }} />
+                      Reset Entire Customization Engine
+                    </button>
+                  </div>
+                )}
+
+                {/* SUB-TAB 2: APPEARANCE (Independent Colors, Borders, Glow, Fonts) */}
+                {customizeSubTab === 'appearance' && (
+                  <div className="kb-list-container">
+                    {(
+                      [
+                        ['bgPrimary', 'Window Background'],
+                        ['bgElevated', 'Elevated Panels & Cards'],
+                        ['textPrimary', 'Primary Text Color'],
+                        ['textSecondary', 'Secondary Muted Text'],
+                        ['accentPrimary', 'Primary Accent Color'],
+                        ['accentSecondary', 'Secondary Accent Color'],
+                        ['borderColor', 'Global Border Color']
+                      ] as [keyof CustomizationProfile['appearance'], string][]
+                    ).map(([key, label]) => (
+                      <div key={key} className="kb-setting-row">
+                        <span className="kb-setting-label">{label}</span>
+                        <input
+                          type="color"
+                          value={String(custom.appearance[key])}
+                          onChange={(e) =>
+                            window.kinetic.updateCustomization({
+                              appearance: { ...custom.appearance, [key]: e.target.value }
+                            })
+                          }
+                        />
+                      </div>
+                    ))}
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Border Thickness ({custom.appearance.borderWidth}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={4}
+                        value={custom.appearance.borderWidth}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            appearance: {
+                              ...custom.appearance,
+                              borderWidth: Number(e.target.value)
+                            }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Global Corner Radius ({custom.appearance.borderRadius}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={20}
+                        value={custom.appearance.borderRadius}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            appearance: {
+                              ...custom.appearance,
+                              borderRadius: Number(e.target.value)
+                            }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Neon Glow Intensity ({Math.round(custom.appearance.glowIntensity * 100)}%)
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={0.6}
+                        step={0.02}
+                        value={custom.appearance.glowIntensity}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            appearance: {
+                              ...custom.appearance,
+                              glowIntensity: Number(e.target.value)
+                            }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">Browser Font Family</label>
+                      <select
+                        className="kb-select"
+                        value={custom.appearance.fontFamily}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            appearance: { ...custom.appearance, fontFamily: e.target.value }
+                          })
+                        }
+                      >
+                        {FONT_OPTIONS.map((f) => (
+                          <option key={f.value} value={f.value}>
+                            {f.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Base Font Size ({custom.appearance.fontSize}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={11}
+                        max={16}
+                        value={custom.appearance.fontSize}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            appearance: { ...custom.appearance, fontSize: Number(e.target.value) }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <span className="kb-setting-label">Enable UI Animations</span>
+                      <input
+                        type="checkbox"
+                        checked={custom.appearance.enableAnimations}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            appearance: {
+                              ...custom.appearance,
+                              enableAnimations: e.target.checked
+                            }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <span className="kb-setting-label">Gaming RGB Chroma Cycle</span>
+                      <input
+                        type="checkbox"
+                        checked={custom.appearance.rgbCycleMode}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            appearance: { ...custom.appearance, rgbCycleMode: e.target.checked }
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-TAB 3: TASKBAR & LAYOUT CUSTOMIZATION */}
+                {customizeSubTab === 'taskbar' && (
+                  <div className="kb-list-container">
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">Taskbar Dock Position</label>
+                      <select
+                        className="kb-select"
+                        value={custom.taskbar.position}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            taskbar: {
+                              ...custom.taskbar,
+                              position: e.target.value as 'top' | 'bottom'
+                            }
+                          })
+                        }
+                      >
+                        <option value="top">Top (Standard Desktop)</option>
+                        <option value="bottom">Bottom (Gaming Dock)</option>
+                      </select>
+                    </div>
+
+                    <div className="kb-setting-row">
+                      <span className="kb-setting-label">Taskbar Background Color</span>
+                      <input
+                        type="color"
+                        value={custom.taskbar.bgColor}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            taskbar: { ...custom.taskbar, bgColor: e.target.value }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Taskbar Height ({custom.taskbar.height}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={36}
+                        max={64}
+                        value={custom.taskbar.height}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            taskbar: { ...custom.taskbar, height: Number(e.target.value) }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Button Size ({custom.taskbar.buttonSize}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={26}
+                        max={42}
+                        value={custom.taskbar.buttonSize}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            taskbar: { ...custom.taskbar, buttonSize: Number(e.target.value) }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Button Spacing ({custom.taskbar.buttonSpacing}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={2}
+                        max={14}
+                        value={custom.taskbar.buttonSpacing}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            taskbar: { ...custom.taskbar, buttonSpacing: Number(e.target.value) }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">Visible Toolbar Buttons</label>
+                      {(
+                        [
+                          ['showHomeButton', 'Home Button'],
+                          ['showPinButton', 'Pin Tab Button'],
+                          ['showDuplicateButton', 'Duplicate Tab Button'],
+                          ['showPrivateButton', 'Private Tab Button'],
+                          ['showBookmarksButton', 'Bookmarks Button'],
+                          ['showHistoryButton', 'History Button'],
+                          ['showDownloadsButton', 'Downloads Button'],
+                          ['showProfilesButton', 'Profiles Button'],
+                          ['showDevToolsButton', 'Developer Tools Button']
+                        ] as [keyof CustomizationProfile['taskbar'], string][]
+                      ).map(([key, label]) => (
+                        <div key={key} className="kb-checkbox-row">
+                          <span className="kb-setting-desc">{label}</span>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(custom.taskbar[key])}
+                            onChange={(e) =>
+                              window.kinetic.updateCustomization({
+                                taskbar: { ...custom.taskbar, [key]: e.target.checked }
+                              })
+                            }
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-TAB 4: INDIVIDUAL TAB & TAB STRIP CUSTOMIZATION */}
+                {customizeSubTab === 'tabs' && (
+                  <div className="kb-list-container">
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">Tab Bar Orientation</label>
+                      <select
+                        className="kb-select"
+                        value={custom.tabs.orientation}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            tabs: {
+                              ...custom.tabs,
+                              orientation: e.target.value as 'horizontal' | 'vertical'
+                            }
+                          })
+                        }
+                      >
+                        <option value="horizontal">Horizontal Top Strip</option>
+                        <option value="vertical">Vertical Left Sidebar</option>
+                      </select>
+                    </div>
+
+                    {custom.tabs.orientation === 'horizontal' ? (
+                      <div className="kb-setting-group">
+                        <label className="kb-setting-label">
+                          Tab Width ({custom.tabs.tabWidth}px)
+                        </label>
+                        <input
+                          type="range"
+                          min={120}
+                          max={320}
+                          value={custom.tabs.tabWidth}
+                          onChange={(e) =>
+                            window.kinetic.updateCustomization({
+                              tabs: { ...custom.tabs, tabWidth: Number(e.target.value) }
+                            })
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <div className="kb-setting-group">
+                        <label className="kb-setting-label">
+                          Vertical Sidebar Width ({custom.tabs.verticalSidebarWidth}px)
+                        </label>
+                        <input
+                          type="range"
+                          min={160}
+                          max={320}
+                          value={custom.tabs.verticalSidebarWidth}
+                          onChange={(e) =>
+                            window.kinetic.updateCustomization({
+                              tabs: {
+                                ...custom.tabs,
+                                verticalSidebarWidth: Number(e.target.value)
+                              }
+                            })
+                          }
+                        />
+                      </div>
+                    )}
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Tab Height ({custom.tabs.tabHeight}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={26}
+                        max={46}
+                        value={custom.tabs.tabHeight}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            tabs: { ...custom.tabs, tabHeight: Number(e.target.value) }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Tab Corner Radius ({custom.tabs.tabRadius}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={16}
+                        value={custom.tabs.tabRadius}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            tabs: { ...custom.tabs, tabRadius: Number(e.target.value) }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-row">
+                      <span className="kb-setting-label">Active Tab Background</span>
+                      <input
+                        type="color"
+                        value={custom.tabs.activeTabBg}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            tabs: { ...custom.tabs, activeTabBg: e.target.value }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-row">
+                      <span className="kb-setting-label">Inactive Tab Background</span>
+                      <input
+                        type="color"
+                        value={custom.tabs.inactiveTabBg}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            tabs: { ...custom.tabs, inactiveTabBg: e.target.value }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-row">
+                      <span className="kb-setting-label">Active Tab Border Accent</span>
+                      <input
+                        type="color"
+                        value={custom.tabs.activeTabBorderColor}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            tabs: { ...custom.tabs, activeTabBorderColor: e.target.value }
+                          })
+                        }
+                      />
+                    </div>
+
+                    {/* Per-Tab Individual Customization Override */}
+                    {activeTab && (
+                      <div
+                        className="kb-card-item"
+                        style={{ flexDirection: 'column', alignItems: 'stretch', marginTop: 8 }}
+                      >
+                        <span className="kb-setting-label" style={{ color: 'var(--kb-accent)' }}>
+                          Customize Current Active Tab Individually
+                        </span>
+                        <input
+                          type="text"
+                          className="kb-input"
+                          placeholder="Custom tab name override..."
+                          value={tabCustomTitleDraft}
+                          onChange={(e) => setTabCustomTitleDraft(e.target.value)}
+                        />
+                        <div className="kb-setting-row">
+                          <span className="kb-setting-desc">This Tab Text/Border Color</span>
+                          <input
+                            type="color"
+                            value={tabCustomColorDraft}
+                            onChange={(e) => setTabCustomColorDraft(e.target.value)}
+                          />
+                        </div>
+                        <div className="kb-setting-row">
+                          <span className="kb-setting-desc">This Tab Background</span>
+                          <input
+                            type="color"
+                            value={tabCustomBgDraft}
+                            onChange={(e) => setTabCustomBgDraft(e.target.value)}
+                          />
+                        </div>
+                        <div className="kb-btn-row">
+                          <button
+                            type="button"
+                            className="kb-btn primary"
+                            onClick={() =>
+                              window.kinetic.updateTabCustomStyle(activeTab.id, {
+                                customTitle: tabCustomTitleDraft,
+                                customColor: tabCustomColorDraft,
+                                customBg: tabCustomBgDraft
+                              })
+                            }
+                          >
+                            Apply to This Tab
+                          </button>
+                          <button
+                            type="button"
+                            className="kb-btn"
+                            onClick={() =>
+                              window.kinetic.updateTabCustomStyle(activeTab.id, {
+                                customTitle: undefined,
+                                customColor: undefined,
+                                customBg: undefined
+                              })
+                            }
+                          >
+                            Clear Tab Style
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* SUB-TAB 5: SEARCH / ADDRESS BAR CUSTOMIZATION */}
+                {customizeSubTab === 'searchbar' && (
+                  <div className="kb-list-container">
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Search Bar Total Width ({custom.searchBar.widthPercent}%)
+                      </label>
+                      <span className="kb-setting-desc">
+                        Make the search bar compact (30%) or full-width (100%).
+                      </span>
+                      <input
+                        type="range"
+                        min={30}
+                        max={100}
+                        value={custom.searchBar.widthPercent}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            searchBar: {
+                              ...custom.searchBar,
+                              widthPercent: Number(e.target.value)
+                            }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">Search Bar Alignment</label>
+                      <select
+                        className="kb-select"
+                        value={custom.searchBar.alignment}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            searchBar: {
+                              ...custom.searchBar,
+                              alignment: e.target.value as 'left' | 'center' | 'right'
+                            }
+                          })
+                        }
+                      >
+                        <option value="left">Left Aligned</option>
+                        <option value="center">Centered</option>
+                        <option value="right">Right Aligned</option>
+                      </select>
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Search Bar Height ({custom.searchBar.height}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={26}
+                        max={44}
+                        value={custom.searchBar.height}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            searchBar: { ...custom.searchBar, height: Number(e.target.value) }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Corner Radius ({custom.searchBar.borderRadius}px)
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={22}
+                        value={custom.searchBar.borderRadius}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            searchBar: {
+                              ...custom.searchBar,
+                              borderRadius: Number(e.target.value)
+                            }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-row">
+                      <span className="kb-setting-label">Search Bar Background</span>
+                      <input
+                        type="color"
+                        value={custom.searchBar.bgColor}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            searchBar: { ...custom.searchBar, bgColor: e.target.value }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-row">
+                      <span className="kb-setting-label">Search Bar Text Color</span>
+                      <input
+                        type="color"
+                        value={custom.searchBar.textColor}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            searchBar: { ...custom.searchBar, textColor: e.target.value }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-row">
+                      <span className="kb-setting-label">Search Bar Border Color</span>
+                      <input
+                        type="color"
+                        value={custom.searchBar.borderColor}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            searchBar: { ...custom.searchBar, borderColor: e.target.value }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <span className="kb-setting-label">Show Security / Engine Badge</span>
+                      <input
+                        type="checkbox"
+                        checked={custom.searchBar.showSecurityBadge}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            searchBar: {
+                              ...custom.searchBar,
+                              showSecurityBadge: e.target.checked
+                            }
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-TAB 6: BROWSER SOUND SYSTEM */}
+                {customizeSubTab === 'sounds' && (
+                  <div className="kb-list-container">
+                    <div className="kb-checkbox-row">
+                      <div>
+                        <div className="kb-setting-label">Enable Browser Sound Effects</div>
+                        <div className="kb-setting-desc">
+                          Disabled by default. Uses zero-latency Web Audio synthesis or custom audio
+                          uploads.
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={custom.sounds.enabled}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            sounds: { ...custom.sounds, enabled: e.target.checked }
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">Built-In Sound Pack</label>
+                      <select
+                        className="kb-select"
+                        value={custom.sounds.pack}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            sounds: {
+                              ...custom.sounds,
+                              pack: e.target.value as SoundPackId
+                            }
+                          })
+                        }
+                      >
+                        <option value="sci-fi">Kinetic Sci-Fi Synth</option>
+                        <option value="mechanical">Mechanical Gaming Switch</option>
+                        <option value="minimal">Soft Minimal Studio</option>
+                        <option value="retro">8-Bit Arcade Retro</option>
+                      </select>
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">
+                        Master Volume ({Math.round(custom.sounds.masterVolume * 100)}%)
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={custom.sounds.masterVolume}
+                        onChange={(e) =>
+                          window.kinetic.updateCustomization({
+                            sounds: { ...custom.sounds, masterVolume: Number(e.target.value) }
+                          })
+                        }
+                      />
+                    </div>
+
+                    {(Object.keys(SOUND_EVENT_LABELS) as SoundEventId[]).map((evKey) => {
+                      const evCfg = custom.sounds.events[evKey]
+                      return (
+                        <div
+                          key={evKey}
+                          className="kb-card-item"
+                          style={{ flexDirection: 'column', alignItems: 'stretch' }}
+                        >
+                          <div className="kb-setting-row">
+                            <span className="kb-setting-label">{SOUND_EVENT_LABELS[evKey]}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <button
+                                type="button"
+                                className="kb-btn"
+                                style={{ height: 24, padding: '0 8px' }}
+                                onClick={() =>
+                                  soundEngine.play(evKey, { ...custom.sounds, enabled: true })
+                                }
+                              >
+                                Test
+                              </button>
+                              <input
+                                type="checkbox"
+                                checked={evCfg?.enabled ?? true}
+                                onChange={(e) =>
+                                  window.kinetic.updateCustomization({
+                                    sounds: {
+                                      ...custom.sounds,
+                                      events: {
+                                        ...custom.sounds.events,
+                                        [evKey]: { ...evCfg, enabled: e.target.checked }
+                                      }
+                                    }
+                                  })
+                                }
+                              />
+                            </div>
+                          </div>
+
+                          <div className="kb-setting-row">
+                            <span className="kb-setting-desc">
+                              Vol: {Math.round((evCfg?.volume ?? 0.5) * 100)}%
+                            </span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={evCfg?.volume ?? 0.5}
+                              onChange={(e) =>
+                                window.kinetic.updateCustomization({
+                                  sounds: {
+                                    ...custom.sounds,
+                                    events: {
+                                      ...custom.sounds.events,
+                                      [evKey]: { ...evCfg, volume: Number(e.target.value) }
+                                    }
+                                  }
+                                })
+                              }
+                            />
+                          </div>
+
+                          <div className="kb-setting-row">
+                            <span className="kb-setting-desc">
+                              {evCfg?.customAudioDataUrl ? 'Custom Audio Loaded' : 'Custom .mp3/.wav:'}
+                            </span>
+                            <input
+                              type="file"
+                              accept="audio/*"
+                              style={{ fontSize: 10, width: 150 }}
+                              onChange={(e) => handleCustomSoundUpload(evKey, e)}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* SUB-TAB 7: LIVE CUSTOM CSS EDITOR */}
+                {customizeSubTab === 'css' && (
+                  <div className="kb-list-container">
+                    <span className="kb-setting-desc">
+                      Modify any browser UI class (`.kb-tab`, `.kb-navbar-row`, `.kb-omnibox-form`,
+                      `.kb-newtab-studio`) with live hot-reload.
+                    </span>
+                    <textarea
+                      className="kb-css-editor"
+                      value={cssDraft}
+                      onChange={(e) => setCssDraft(e.target.value)}
+                      spellCheck={false}
+                    />
+                    {cssError && (
+                      <span style={{ color: 'var(--kb-danger)', fontSize: 11 }}>{cssError}</span>
+                    )}
+                    <div className="kb-btn-row">
+                      <button
+                        type="button"
+                        className="kb-btn primary"
+                        onClick={handleApplyLiveCss}
+                      >
+                        Apply Live CSS
+                      </button>
+                      <button
+                        type="button"
+                        className="kb-btn"
+                        onClick={() => {
+                          setCssDraft('/* Custom Browser UI CSS - Live Applied */\n')
+                          window.kinetic.updateCustomization({
+                            customCss: '/* Custom Browser UI CSS - Live Applied */\n'
+                          })
+                        }}
+                      >
+                        Reset CSS
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* BOOKMARKS PANEL */}
             {activeDrawer === 'bookmarks' && (
               <>
-                {/* Manual Add Custom Bookmark Form */}
                 <form className="kb-setting-group" onSubmit={handleAddCustomBookmarkSubmit}>
                   <label className="kb-setting-label">Add Custom Bookmark</label>
                   <input
@@ -856,6 +2081,7 @@ export default function App(): JSX.Element {
               </>
             )}
 
+            {/* HISTORY PANEL */}
             {activeDrawer === 'history' && (
               <>
                 <div className="kb-btn-row">
@@ -915,6 +2141,7 @@ export default function App(): JSX.Element {
               </>
             )}
 
+            {/* DOWNLOADS PANEL */}
             {activeDrawer === 'downloads' && (
               <>
                 <div className="kb-btn-row">
@@ -1007,6 +2234,7 @@ export default function App(): JSX.Element {
               </>
             )}
 
+            {/* PROFILES PANEL */}
             {activeDrawer === 'profiles' && (
               <>
                 <span className="kb-setting-desc">
@@ -1016,7 +2244,7 @@ export default function App(): JSX.Element {
                 <button
                   type="button"
                   className="kb-btn"
-                  onClick={() => window.kinetic.createTab(undefined, { isPrivate: true })}
+                  onClick={() => handleCreateTab(undefined, true)}
                 >
                   + Open New Private Tab
                 </button>
@@ -1079,13 +2307,11 @@ export default function App(): JSX.Element {
               </>
             )}
 
+            {/* GENERAL SETTINGS PANEL */}
             {activeDrawer === 'settings' && (
               <>
                 <div className="kb-setting-group">
                   <label className="kb-setting-label">Default Search Engine</label>
-                  <span className="kb-setting-desc">
-                    Automatically updates both the Omnibox and New Tab Studio search bar.
-                  </span>
                   <select
                     className="kb-select"
                     value={settings.searchEngine}
@@ -1136,36 +2362,7 @@ export default function App(): JSX.Element {
                 </div>
 
                 <div className="kb-setting-group">
-                  <label className="kb-setting-label">Primary Accent Color</label>
-                  <div className="kb-color-row">
-                    {ACCENT_PRESETS.map((hex) => (
-                      <button
-                        key={hex}
-                        type="button"
-                        className="kb-color-Swatch"
-                        style={{
-                          backgroundColor: hex,
-                          borderColor: settings.accentColor === hex ? '#ffffff' : 'transparent'
-                        }}
-                        onClick={() => window.kinetic.updateSettings({ accentColor: hex })}
-                      />
-                    ))}
-                    <input
-                      type="color"
-                      value={settings.accentColor}
-                      onChange={(e) =>
-                        window.kinetic.updateSettings({ accentColor: e.target.value })
-                      }
-                      style={{ width: 30, height: 26, background: 'transparent', border: 'none' }}
-                    />
-                  </div>
-                </div>
-
-                <div className="kb-setting-group">
                   <label className="kb-setting-label">Homepage URL</label>
-                  <span className="kb-setting-desc">
-                    Use kinetic://newtab for the custom Kinetic start page.
-                  </span>
                   <input
                     type="text"
                     className="kb-input"
@@ -1205,6 +2402,9 @@ export default function App(): JSX.Element {
           </aside>
         )}
       </main>
+
+      {/* Render Taskbar at Bottom if configured */}
+      {custom.taskbar.position === 'bottom' && renderNavbarRow(true)}
     </div>
   )
 }
