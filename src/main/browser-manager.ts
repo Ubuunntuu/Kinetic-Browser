@@ -1,10 +1,15 @@
-import { BaseWindow, WebContentsView } from 'electron'
+import { BaseWindow, DownloadItem, session, shell, WebContentsView } from 'electron'
 import { randomUUID } from 'crypto'
+import * as path from 'path'
 import {
+  BookmarkItem,
   BrowserSettings,
   BrowserStatePayload,
+  DownloadEntry,
+  SavedSessionTab,
   SEARCH_ENGINES,
-  TabState
+  TabState,
+  UserProfile
 } from '../shared/types'
 import { SettingsStorage } from './storage'
 
@@ -21,12 +26,15 @@ export class BrowserManager {
   private tabOrder: string[] = []
   private activeTabId: string | null = null
   private rightDrawerOpen: boolean = false
-  private rightDrawerWidth: number = 360
+  private rightDrawerWidth: number = 380
+  private activeDownloads: Map<string, DownloadItem> = new Map()
+  private hookedPartitions: Set<string> = new Set()
 
   constructor(baseWindow: BaseWindow, uiView: WebContentsView, storage: SettingsStorage) {
     this.baseWindow = baseWindow
     this.uiView = uiView
     this.storage = storage
+    this.rightDrawerWidth = storage.getSettings().sidebarOpenWidth
 
     this.baseWindow.on('resize', () => this.updateLayoutBounds())
     this.baseWindow.on('maximize', () => {
@@ -36,6 +44,87 @@ export class BrowserManager {
     this.baseWindow.on('unmaximize', () => {
       this.updateLayoutBounds()
       this.broadcastState()
+    })
+    this.baseWindow.on('close', () => {
+      this.persistCurrentSession()
+    })
+  }
+
+  public initializeStartupTabs(): void {
+    const settings = this.storage.getSettings()
+    const profileId = this.storage.getActiveProfileId()
+    const saved = this.storage.getProfileSession(profileId)
+
+    if (settings.restorePreviousSession && saved && saved.tabs.length > 0) {
+      const createdIds: string[] = []
+      for (const savedTab of saved.tabs) {
+        const id = this.createTab(savedTab.url, {
+          isPrivate: false,
+          isPinned: savedTab.isPinned,
+          skipSessionSave: true
+        })
+        createdIds.push(id)
+      }
+      const targetIndex = Math.min(saved.activeIndex, createdIds.length - 1)
+      if (createdIds[targetIndex]) {
+        this.switchTab(createdIds[targetIndex])
+      }
+    } else {
+      this.createTab()
+    }
+  }
+
+  private ensureDownloadListenerForPartition(partitionName: string): void {
+    if (this.hookedPartitions.has(partitionName)) return
+    this.hookedPartitions.add(partitionName)
+
+    const targetSession = session.fromPartition(partitionName)
+    targetSession.on('will-download', (_event, item) => {
+      const downloadId = randomUUID()
+      const fileName = item.getFilename()
+      const downloadsDir = path.join(process.env.USERPROFILE || '', 'Downloads')
+      const savePath = path.join(downloadsDir, fileName)
+      item.setSavePath(savePath)
+
+      this.activeDownloads.set(downloadId, item)
+
+      const buildEntry = (statusOverride?: DownloadEntry['status']): DownloadEntry => ({
+        id: downloadId,
+        fileName,
+        url: item.getURL(),
+        savePath: item.getSavePath() || savePath,
+        receivedBytes: item.getReceivedBytes(),
+        totalBytes: item.getTotalBytes(),
+        status:
+          statusOverride ||
+          (item.isPaused() ? 'paused' : (item.getState() as DownloadEntry['status'])),
+        startedAt: Date.now()
+      })
+
+      this.storage.upsertDownload(buildEntry('progressing'))
+      this.broadcastState()
+
+      item.on('updated', (_e, state) => {
+        const status: DownloadEntry['status'] = item.isPaused()
+          ? 'paused'
+          : state === 'progressing'
+            ? 'progressing'
+            : 'interrupted'
+        this.storage.upsertDownload(buildEntry(status))
+        this.broadcastState()
+      })
+
+      item.once('done', (_e, state) => {
+        this.activeDownloads.delete(downloadId)
+        const finalStatus: DownloadEntry['status'] =
+          state === 'completed'
+            ? 'completed'
+            : state === 'cancelled'
+              ? 'cancelled'
+              : 'interrupted'
+        this.storage.upsertDownload(buildEntry(finalStatus))
+        this.broadcastState()
+      })
     })
   }
 
@@ -48,33 +137,43 @@ export class BrowserManager {
       return settings.newTabUrl || engine.homeUrl
     }
 
-    // Explicit protocol
     if (/^(https?:\/\/|file:\/\/|chrome:\/\/|about:)/i.test(trimmed)) {
       return trimmed
     }
 
-    // Localhost or IPv4 address
     if (/^(localhost(:\d+)?|(\d{1,3}\.){3}\d{1,3}(:\d+)?)(\/.*)?$/i.test(trimmed)) {
       return `http://${trimmed}`
     }
 
-    // Domain pattern without spaces (e.g., github.com, reddit.com/r/pcgaming)
     const isLikelyDomain = /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/.*)?$/.test(trimmed)
     if (isLikelyDomain && !trimmed.includes(' ')) {
       return `https://${trimmed}`
     }
 
-    // Fallback to configured search engine query
     return engine.searchUrlTemplate.replace('%s', encodeURIComponent(trimmed))
   }
 
-  public createTab(initialInput?: string): string {
+  public createTab(
+    initialInput?: string,
+    options?: { isPrivate?: boolean; isPinned?: boolean; skipSessionSave?: boolean }
+  ): string {
     const settings = this.storage.getSettings()
     const targetUrl = this.resolveInputToUrl(initialInput || settings.newTabUrl)
     const tabId = randomUUID()
+    const isPrivate = Boolean(options?.isPrivate)
+    const profileId = this.storage.getActiveProfileId()
+
+    // Private tabs run in an ephemeral in-memory partition (no persist: prefix)
+    // Standard tabs run inside the active profile's isolated persistent partition
+    const partitionName = isPrivate
+      ? `kinetic-private-${tabId}`
+      : `persist:kinetic-profile-${profileId}`
+
+    this.ensureDownloadListenerForPartition(partitionName)
 
     const view = new WebContentsView({
       webPreferences: {
+        partition: partitionName,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -83,16 +182,15 @@ export class BrowserManager {
       }
     })
 
-    // Set a modern Chromium user-agent without Electron token leakage
     const defaultUA = view.webContents.getUserAgent()
     const cleanUA = defaultUA
       .replace(/\sElectron\/[\d.]+/, '')
       .replace(/\skinetic-browser\/[\d.]+/i, '')
-    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.2.0`)
+    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.3.0`)
 
     const initialState: TabState = {
       id: tabId,
-      title: 'New Tab',
+      title: isPrivate ? 'Private Tab' : 'New Tab',
       url: targetUrl,
       favicon: '',
       isLoading: true,
@@ -102,23 +200,23 @@ export class BrowserManager {
       hasCertError: false,
       isAudioPlaying: false,
       isMuted: false,
-      isPinned: false
+      isPinned: Boolean(options?.isPinned),
+      isPrivate,
+      profileId
     }
 
-    const managedTab: ManagedTab = {
-      state: initialState,
-      view
-    }
-
-    this.tabs.set(tabId, managedTab)
+    this.tabs.set(tabId, { state: initialState, view })
     this.tabOrder.push(tabId)
     this.attachWebContentsListeners(tabId, view)
 
-    // Switch immediately to the new tab
     this.switchTab(tabId)
     view.webContents.loadURL(targetUrl).catch((err) => {
-      console.warn(`[KineticBrowser] Navigation load warning for ${targetUrl}:`, err.message)
+      console.warn(`[KineticBrowser] Navigation warning for ${targetUrl}:`, err.message)
     })
+
+    if (!options?.skipSessionSave) {
+      this.persistCurrentSession()
+    }
 
     return tabId
   }
@@ -126,7 +224,7 @@ export class BrowserManager {
   private attachWebContentsListeners(tabId: string, view: WebContentsView): void {
     const wc = view.webContents
 
-    const syncNavigationState = (): void => {
+    const syncNavigationState = (recordHistory = false): void => {
       const tab = this.tabs.get(tabId)
       if (!tab) return
       const currentUrl = wc.getURL() || tab.state.url
@@ -136,6 +234,17 @@ export class BrowserManager {
       tab.state.canGoForward = wc.navigationHistory.canGoForward()
       tab.state.isSecure = currentUrl.startsWith('https://') && !tab.state.hasCertError
       tab.state.isMuted = wc.isAudioMuted()
+
+      if (recordHistory && !tab.state.isPrivate && currentUrl.startsWith('http')) {
+        this.storage.recordHistoryVisit({
+          url: currentUrl,
+          title: tab.state.title,
+          favicon: tab.state.favicon,
+          profileId: tab.state.profileId
+        })
+      }
+
+      this.persistCurrentSession()
       this.broadcastState()
     }
 
@@ -144,22 +253,32 @@ export class BrowserManager {
       if (!tab) return
       tab.state.isLoading = true
       tab.state.hasCertError = false
-      syncNavigationState()
+      syncNavigationState(false)
     })
 
     wc.on('did-stop-loading', () => {
       const tab = this.tabs.get(tabId)
       if (!tab) return
       tab.state.isLoading = false
-      syncNavigationState()
+      syncNavigationState(true)
     })
 
-    wc.on('did-navigate', () => syncNavigationState())
-    wc.on('did-navigate-in-page', () => syncNavigationState())
+    wc.on('did-navigate', () => syncNavigationState(true))
+    wc.on('did-navigate-in-page', () => syncNavigationState(false))
+
     wc.on('page-title-updated', (_event, title) => {
       const tab = this.tabs.get(tabId)
       if (!tab) return
       tab.state.title = title
+      if (!tab.state.isPrivate && tab.state.url.startsWith('http')) {
+        this.storage.recordHistoryVisit({
+          url: tab.state.url,
+          title,
+          favicon: tab.state.favicon,
+          profileId: tab.state.profileId
+        })
+      }
+      this.persistCurrentSession()
       this.broadcastState()
     })
 
@@ -185,7 +304,6 @@ export class BrowserManager {
     })
 
     wc.on('certificate-error', (event, url, error, _certificate, callback) => {
-      // Rule 8: Never bypass certificate errors silently
       event.preventDefault()
       callback(false)
       const tab = this.tabs.get(tabId)
@@ -198,27 +316,50 @@ export class BrowserManager {
       console.warn(`[Security] Blocked invalid TLS certificate on ${url}: ${error}`)
     })
 
-    // Open target="_blank" and window.open links inside a new Kinetic tab
     wc.setWindowOpenHandler((details) => {
+      const tab = this.tabs.get(tabId)
       if (details.url && details.url !== 'about:blank') {
-        this.createTab(details.url)
+        this.createTab(details.url, { isPrivate: tab?.state.isPrivate })
       }
       return { action: 'deny' }
     })
+  }
+
+  private persistCurrentSession(): void {
+    const profileId = this.storage.getActiveProfileId()
+    const nonPrivateTabs: SavedSessionTab[] = []
+    let activeIdx = 0
+
+    for (const id of this.tabOrder) {
+      const tab = this.tabs.get(id)
+      if (tab && !tab.state.isPrivate && tab.state.profileId === profileId) {
+        if (id === this.activeTabId) {
+          activeIdx = nonPrivateTabs.length
+        }
+        nonPrivateTabs.push({
+          url: tab.state.url,
+          title: tab.state.title,
+          isPinned: tab.state.isPinned
+        })
+      }
+    }
+
+    if (nonPrivateTabs.length > 0) {
+      this.storage.saveProfileSession(profileId, nonPrivateTabs, activeIdx)
+    }
   }
 
   public switchTab(tabId: string): void {
     const target = this.tabs.get(tabId)
     if (!target) return
 
-    // Detach previous active tab view from compositor
     if (this.activeTabId && this.activeTabId !== tabId) {
       const previous = this.tabs.get(this.activeTabId)
       if (previous) {
         try {
           this.baseWindow.contentView.removeChildView(previous.view)
         } catch {
-          // Ignore if not attached
+          // Ignore if already detached
         }
       }
     }
@@ -227,6 +368,7 @@ export class BrowserManager {
     this.baseWindow.contentView.addChildView(target.view)
     this.updateLayoutBounds()
     target.view.webContents.focus()
+    this.persistCurrentSession()
     this.broadcastState()
   }
 
@@ -242,7 +384,12 @@ export class BrowserManager {
     try {
       this.baseWindow.contentView.removeChildView(target.view)
     } catch {
-      // Ignore if not attached
+      // Ignore
+    }
+
+    // If private tab, clear ephemeral session storage before closing
+    if (target.state.isPrivate) {
+      target.view.webContents.session.clearStorageData().catch(() => {})
     }
 
     target.view.webContents.close()
@@ -258,14 +405,14 @@ export class BrowserManager {
       const nextIndex = Math.min(index, this.tabOrder.length - 1)
       this.switchTab(this.tabOrder[nextIndex])
     } else {
+      this.persistCurrentSession()
       this.broadcastState()
     }
   }
 
   public duplicateTab(tabId: string): string {
     const source = this.tabs.get(tabId)
-    const url = source ? source.state.url : undefined
-    return this.createTab(url)
+    return this.createTab(source?.state.url, { isPrivate: source?.state.isPrivate })
   }
 
   public togglePinTab(tabId: string): void {
@@ -273,10 +420,10 @@ export class BrowserManager {
     if (!target) return
     target.state.isPinned = !target.state.isPinned
 
-    // Sort pinned tabs to the front of tabOrder
     const pinned = this.tabOrder.filter((id) => this.tabs.get(id)?.state.isPinned)
     const unpinned = this.tabOrder.filter((id) => !this.tabs.get(id)?.state.isPinned)
     this.tabOrder = [...pinned, ...unpinned]
+    this.persistCurrentSession()
     this.broadcastState()
   }
 
@@ -320,22 +467,15 @@ export class BrowserManager {
   }
 
   public reload(): void {
-    const active = this.getActiveTab()
-    if (active) {
-      active.view.webContents.reload()
-    }
+    this.getActiveTab()?.view.webContents.reload()
   }
 
   public stop(): void {
-    const active = this.getActiveTab()
-    if (active) {
-      active.view.webContents.stop()
-    }
+    this.getActiveTab()?.view.webContents.stop()
   }
 
   public goHome(): void {
-    const settings = this.storage.getSettings()
-    this.navigateActiveTab(settings.homepageUrl)
+    this.navigateActiveTab(this.storage.getSettings().homepageUrl)
   }
 
   public toggleActiveTabDevTools(): void {
@@ -348,6 +488,122 @@ export class BrowserManager {
     }
   }
 
+  // History Operations
+  public deleteHistoryItem(id: string): void {
+    this.storage.deleteHistoryItem(id)
+    this.broadcastState()
+  }
+
+  public clearHistory(): void {
+    this.storage.clearHistory()
+    this.broadcastState()
+  }
+
+  // Bookmarks Operations
+  public addBookmark(data: {
+    title: string
+    url: string
+    favicon?: string
+    folder?: string
+  }): BookmarkItem {
+    const item = this.storage.addBookmark(data)
+    this.broadcastState()
+    return item
+  }
+
+  public removeBookmark(id: string): void {
+    this.storage.removeBookmark(id)
+    this.broadcastState()
+  }
+
+  public createBookmarkFolder(folderName: string): string[] {
+    const folders = this.storage.createBookmarkFolder(folderName)
+    this.broadcastState()
+    return folders
+  }
+
+  // Downloads Operations
+  public pauseDownload(id: string): void {
+    const item = this.activeDownloads.get(id)
+    if (item && item.canResume() && !item.isPaused()) {
+      item.pause()
+    } else if (item && !item.isPaused()) {
+      item.pause()
+    }
+  }
+
+  public resumeDownload(id: string): void {
+    const item = this.activeDownloads.get(id)
+    if (item && item.isPaused()) {
+      item.resume()
+    }
+  }
+
+  public cancelDownload(id: string): void {
+    const item = this.activeDownloads.get(id)
+    if (item) {
+      item.cancel()
+    }
+  }
+
+  public showDownloadInFolder(id: string): void {
+    const entry = this.storage.getDownloads().find((d) => d.id === id)
+    if (entry && entry.savePath) {
+      shell.showItemInFolder(entry.savePath)
+    }
+  }
+
+  public clearCompletedDownloads(): void {
+    this.storage.clearCompletedDownloads()
+    this.broadcastState()
+  }
+
+  // Profiles Operations
+  public createProfile(name: string, color: string): UserProfile {
+    const created = this.storage.createProfile(name, color)
+    this.broadcastState()
+    return created
+  }
+
+  public switchProfile(profileId: string): void {
+    if (profileId === this.storage.getActiveProfileId()) return
+
+    // Save current profile tabs before switching
+    this.persistCurrentSession()
+
+    // Close all current tabs cleanly
+    for (const id of [...this.tabOrder]) {
+      const tab = this.tabs.get(id)
+      if (tab) {
+        try {
+          this.baseWindow.contentView.removeChildView(tab.view)
+        } catch {
+          // Ignore
+        }
+        tab.view.webContents.close()
+      }
+    }
+    this.tabs.clear()
+    this.tabOrder = []
+    this.activeTabId = null
+
+    this.storage.setActiveProfileId(profileId)
+    this.initializeStartupTabs()
+    this.broadcastState()
+  }
+
+  public deleteProfile(profileId: string): void {
+    if (profileId === 'default') return
+    const wasActive = this.storage.getActiveProfileId() === profileId
+    this.storage.deleteProfile(profileId)
+    if (wasActive) {
+      this.switchProfile('default')
+    } else {
+      this.broadcastState()
+    }
+  }
+
+  // Layout Geometry
   public setRightDrawerOpen(isOpen: boolean, width?: number): void {
     this.rightDrawerOpen = isOpen
     if (typeof width === 'number' && width >= 260 && width <= 640) {
@@ -358,13 +614,18 @@ export class BrowserManager {
     this.updateLayoutBounds()
   }
 
+  public getEffectiveChromeHeight(): number {
+    const settings = this.storage.getSettings()
+    const baseHeight = 82
+    const bookmarksBarHeight = settings.showBookmarksBar ? 30 : 0
+    return baseHeight + bookmarksBarHeight
+  }
+
   public updateLayoutBounds(): void {
     if (this.baseWindow.isDestroyed()) return
     const bounds = this.baseWindow.getContentBounds()
-    const settings = this.storage.getSettings()
-    const chromeHeight = settings.chromeHeight || 84
+    const chromeHeight = this.getEffectiveChromeHeight()
 
-    // UI Shell always covers full window so drawers and bars can render anywhere
     this.uiView.setBounds({
       x: 0,
       y: 0,
@@ -421,7 +682,13 @@ export class BrowserManager {
       tabs: orderedTabs,
       activeTabId: this.activeTabId,
       isMaximized: this.baseWindow.isMaximized(),
-      settings: this.storage.getSettings()
+      settings: this.storage.getSettings(),
+      history: this.storage.getHistory(),
+      bookmarks: this.storage.getBookmarks(),
+      bookmarkFolders: this.storage.getBookmarkFolders(),
+      downloads: this.storage.getDownloads(),
+      profiles: this.storage.getProfiles(),
+      activeProfileId: this.storage.getActiveProfileId()
     }
   }
 

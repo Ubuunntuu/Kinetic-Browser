@@ -12,10 +12,10 @@ function createBrowserWindow(): void {
   storage = new SettingsStorage()
 
   mainWindow = new BaseWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 900,
-    minHeight: 600,
+    width: 1480,
+    height: 940,
+    minWidth: 940,
+    minHeight: 620,
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#090a0f',
@@ -34,7 +34,6 @@ function createBrowserWindow(): void {
   mainWindow.contentView.addChildView(uiView)
   browserManager = new BrowserManager(mainWindow, uiView, storage)
 
-  // Load UI Shell
   if (process.env['ELECTRON_RENDERER_URL']) {
     uiView.webContents.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -43,7 +42,7 @@ function createBrowserWindow(): void {
 
   uiView.webContents.once('did-finish-load', () => {
     if (!mainWindow || !browserManager) return
-    browserManager.createTab()
+    browserManager.initializeStartupTabs()
     browserManager.updateLayoutBounds()
     mainWindow.show()
   })
@@ -59,9 +58,12 @@ function registerIpcHandlers(): void {
     return browserManager?.getStatePayload()
   })
 
-  ipcMain.handle('kinetic:create-tab', (_e, url?: string) => {
-    return browserManager?.createTab(url)
-  })
+  ipcMain.handle(
+    'kinetic:create-tab',
+    (_e, url?: string, options?: { isPrivate?: boolean }) => {
+      return browserManager?.createTab(url, options)
+    }
+  )
 
   ipcMain.handle('kinetic:close-tab', (_e, tabId: string) => {
     browserManager?.closeTab(tabId)
@@ -111,6 +113,66 @@ function registerIpcHandlers(): void {
     browserManager?.toggleActiveTabDevTools()
   })
 
+  // History
+  ipcMain.handle('kinetic:delete-history-item', (_e, id: string) => {
+    browserManager?.deleteHistoryItem(id)
+  })
+
+  ipcMain.handle('kinetic:clear-history', () => {
+    browserManager?.clearHistory()
+  })
+
+  // Bookmarks
+  ipcMain.handle(
+    'kinetic:add-bookmark',
+    (_e, data: { title: string; url: string; favicon?: string; folder?: string }) => {
+      return browserManager?.addBookmark(data)
+    }
+  )
+
+  ipcMain.handle('kinetic:remove-bookmark', (_e, id: string) => {
+    browserManager?.removeBookmark(id)
+  })
+
+  ipcMain.handle('kinetic:create-bookmark-folder', (_e, folderName: string) => {
+    return browserManager?.createBookmarkFolder(folderName)
+  })
+
+  // Downloads
+  ipcMain.handle('kinetic:pause-download', (_e, id: string) => {
+    browserManager?.pauseDownload(id)
+  })
+
+  ipcMain.handle('kinetic:resume-download', (_e, id: string) => {
+    browserManager?.resumeDownload(id)
+  })
+
+  ipcMain.handle('kinetic:cancel-download', (_e, id: string) => {
+    browserManager?.cancelDownload(id)
+  })
+
+  ipcMain.handle('kinetic:show-download-folder', (_e, id: string) => {
+    browserManager?.showDownloadInFolder(id)
+  })
+
+  ipcMain.handle('kinetic:clear-downloads', () => {
+    browserManager?.clearCompletedDownloads()
+  })
+
+  // Profiles
+  ipcMain.handle('kinetic:create-profile', (_e, name: string, color: string) => {
+    return browserManager?.createProfile(name, color)
+  })
+
+  ipcMain.handle('kinetic:switch-profile', (_e, profileId: string) => {
+    browserManager?.switchProfile(profileId)
+  })
+
+  ipcMain.handle('kinetic:delete-profile', (_e, profileId: string) => {
+    browserManager?.deleteProfile(profileId)
+  })
+
+  // Layout & Settings
   ipcMain.handle('kinetic:set-right-drawer', (_e, isOpen: boolean, width?: number) => {
     browserManager?.setRightDrawerOpen(isOpen, width)
   })
@@ -127,6 +189,7 @@ function registerIpcHandlers(): void {
     return browserManager?.resetSettings()
   })
 
+  // Window Controls
   ipcMain.handle('kinetic:window-minimize', () => {
     mainWindow?.minimize()
   })

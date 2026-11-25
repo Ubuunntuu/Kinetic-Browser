@@ -16,32 +16,71 @@ import {
   VolumeX,
   Minus,
   Square,
-  Zap
+  Zap,
+  Star,
+  Bookmark,
+  History,
+  Download,
+  Users,
+  EyeOff,
+  Trash2,
+  FolderOpen,
+  Pause,
+  Play,
+  FolderPlus
 } from 'lucide-react'
 import {
+  BookmarkItem,
   BrowserSettings,
   BrowserStatePayload,
   DEFAULT_SETTINGS,
+  DownloadEntry,
+  DrawerPanelId,
+  HistoryEntry,
   SEARCH_ENGINES,
   SearchEngineId,
-  TabState
+  TabState,
+  UserProfile
 } from '../../shared/types'
 
 const ACCENT_PRESETS = ['#00f0ff', '#ff2a6d', '#05d550', '#b537f2', '#ff8a00', '#3b82f6']
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
+}
 
 export default function App(): JSX.Element {
   const [tabs, setTabs] = useState<TabState[]>([])
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [settings, setSettings] = useState<BrowserSettings>(DEFAULT_SETTINGS)
+  const [history, setHistory] = useState<HistoryEntry[]>([])
+  const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([])
+  const [bookmarkFolders, setBookmarkFolders] = useState<string[]>(['Bookmarks Bar'])
+  const [downloads, setDownloads] = useState<DownloadEntry[]>([])
+  const [profiles, setProfiles] = useState<UserProfile[]>([])
+  const [activeProfileId, setActiveProfileId] = useState<string>('default')
+
   const [addressInput, setAddressInput] = useState<string>('')
   const [isAddressFocused, setIsAddressFocused] = useState<boolean>(false)
-  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
+  const [activeDrawer, setActiveDrawer] = useState<DrawerPanelId>('none')
 
-  // Local settings form buffer
+  // Panel Filters & Forms
+  const [historySearch, setHistorySearch] = useState<string>('')
+  const [selectedFolder, setSelectedFolder] = useState<string>('ALL')
+  const [newFolderInput, setNewFolderInput] = useState<string>('')
+  const [newProfileName, setNewProfileName] = useState<string>('')
+  const [newProfileColor, setNewProfileColor] = useState<string>('#00f0ff')
   const [homepageDraft, setHomepageDraft] = useState<string>(DEFAULT_SETTINGS.homepageUrl)
   const [newTabDraft, setNewTabDraft] = useState<string>(DEFAULT_SETTINGS.newTabUrl)
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || null
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0]
+  const currentBookmark = activeTab ? bookmarks.find((b) => b.url === activeTab.url) : undefined
+  const hasActiveDownloads = downloads.some((d) => d.status === 'progressing')
 
   useEffect(() => {
     const applyState = (payload: BrowserStatePayload): void => {
@@ -49,11 +88,16 @@ export default function App(): JSX.Element {
       setTabs(payload.tabs)
       setActiveTabId(payload.activeTabId)
       setSettings(payload.settings)
+      setHistory(payload.history || [])
+      setBookmarks(payload.bookmarks || [])
+      setBookmarkFolders(payload.bookmarkFolders || ['Bookmarks Bar'])
+      setDownloads(payload.downloads || [])
+      setProfiles(payload.profiles || [])
+      setActiveProfileId(payload.activeProfileId || 'default')
+
+      const effectiveChromeHeight = 82 + (payload.settings.showBookmarksBar ? 30 : 0)
       document.documentElement.style.setProperty('--kb-accent', payload.settings.accentColor)
-      document.documentElement.style.setProperty(
-        '--kb-chrome-height',
-        `${payload.settings.chromeHeight}px`
-      )
+      document.documentElement.style.setProperty('--kb-chrome-height', `${effectiveChromeHeight}px`)
       document.documentElement.style.setProperty(
         '--kb-drawer-width',
         `${payload.settings.sidebarOpenWidth}px`
@@ -75,12 +119,17 @@ export default function App(): JSX.Element {
     return () => unsubscribe()
   }, [])
 
-  // Keep omnibox synced with active tab URL when user isn't actively typing
   useEffect(() => {
     if (!isAddressFocused && activeTab) {
       setAddressInput(activeTab.url)
     }
   }, [activeTab?.url, activeTabId, isAddressFocused])
+
+  const toggleDrawerPanel = (panel: DrawerPanelId): void => {
+    const next = activeDrawer === panel ? 'none' : panel
+    setActiveDrawer(next)
+    window.kinetic.setRightDrawerOpen(next !== 'none', settings.sidebarOpenWidth)
+  }
 
   const handleNavigateSubmit = (e: React.FormEvent): void => {
     e.preventDefault()
@@ -88,10 +137,32 @@ export default function App(): JSX.Element {
     ;(document.activeElement as HTMLElement | null)?.blur()
   }
 
-  const toggleSettingsDrawer = (): void => {
-    const nextState = !isSettingsOpen
-    setIsSettingsOpen(nextState)
-    window.kinetic.setRightDrawerOpen(nextState, settings.sidebarOpenWidth)
+  const handleToggleBookmarkActiveTab = async (): Promise<void> => {
+    if (!activeTab) return
+    if (currentBookmark) {
+      await window.kinetic.removeBookmark(currentBookmark.id)
+    } else {
+      await window.kinetic.addBookmark({
+        title: activeTab.title,
+        url: activeTab.url,
+        favicon: activeTab.favicon,
+        folder: 'Bookmarks Bar'
+      })
+    }
+  }
+
+  const handleCreateFolder = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    if (!newFolderInput.trim()) return
+    await window.kinetic.createBookmarkFolder(newFolderInput.trim())
+    setNewFolderInput('')
+  }
+
+  const handleCreateProfile = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    if (!newProfileName.trim()) return
+    await window.kinetic.createProfile(newProfileName.trim(), newProfileColor)
+    setNewProfileName('')
   }
 
   const handleSaveSettings = async (): Promise<void> => {
@@ -103,11 +174,16 @@ export default function App(): JSX.Element {
     setNewTabDraft(updated.newTabUrl)
   }
 
-  const handleResetSettings = async (): Promise<void> => {
-    const defaults = await window.kinetic.resetSettings()
-    setHomepageDraft(defaults.homepageUrl)
-    setNewTabDraft(defaults.newTabUrl)
-  }
+  const filteredHistory = history.filter(
+    (h) =>
+      h.title.toLowerCase().includes(historySearch.toLowerCase()) ||
+      h.url.toLowerCase().includes(historySearch.toLowerCase())
+  )
+
+  const filteredBookmarks =
+    selectedFolder === 'ALL'
+      ? bookmarks
+      : bookmarks.filter((b) => b.folder === selectedFolder)
 
   return (
     <div className="kb-shell">
@@ -115,10 +191,25 @@ export default function App(): JSX.Element {
       <header className="kb-chrome">
         {/* ROW 1: TAB STRIP */}
         <div className="kb-tabstrip-row">
-          <div className="kb-brand-badge" title="Kinetic Browser Core v0.2.0">
+          <div className="kb-brand-badge" title="Kinetic Browser Core v0.3.0">
             <Zap size={13} />
             <span>KINETIC</span>
           </div>
+
+          {activeProfile && (
+            <button
+              type="button"
+              className="kb-profile-pill"
+              onClick={() => toggleDrawerPanel('profiles')}
+              title={`Active Profile: ${activeProfile.name} (Click to switch)`}
+            >
+              <span
+                className="kb-profile-dot"
+                style={{ backgroundColor: activeProfile.color }}
+              />
+              <span>{activeProfile.name}</span>
+            </button>
+          )}
 
           <div className="kb-tabs-container">
             {tabs.map((tab) => {
@@ -126,20 +217,27 @@ export default function App(): JSX.Element {
               return (
                 <div
                   key={tab.id}
-                  className={`kb-tab ${isActive ? 'active' : ''} ${tab.isPinned ? 'pinned' : ''}`}
+                  className={`kb-tab ${isActive ? 'active' : ''} ${tab.isPinned ? 'pinned' : ''} ${tab.isPrivate ? 'private' : ''}`}
                   onClick={() => window.kinetic.switchTab(tab.id)}
                   onAuxClick={(e) => {
                     if (e.button === 1) window.kinetic.closeTab(tab.id)
                   }}
-                  title={`${tab.title}\n${tab.url}`}
+                  title={`${tab.title}\n${tab.url}${tab.isPrivate ? '\n[Private Ephemeral Session]' : ''}`}
                 >
-                  {tab.favicon ? (
+                  {tab.isPrivate ? (
+                    <EyeOff size={13} color="#d896ff" style={{ flexShrink: 0 }} />
+                  ) : tab.favicon ? (
                     <img src={tab.favicon} alt="" className="kb-tab-favicon" />
                   ) : (
                     <Zap size={13} style={{ flexShrink: 0, opacity: 0.7 }} />
                   )}
 
-                  {!tab.isPinned && <span className="kb-tab-title">{tab.title}</span>}
+                  {!tab.isPinned && (
+                    <>
+                      {tab.isPrivate && <span className="kb-private-tag">PRIV</span>}
+                      <span className="kb-tab-title">{tab.title}</span>
+                    </>
+                  )}
 
                   {(tab.isAudioPlaying || tab.isMuted) && (
                     <button
@@ -180,9 +278,17 @@ export default function App(): JSX.Element {
             >
               <Plus size={15} />
             </button>
+
+            <button
+              type="button"
+              className="kb-newtab-btn private"
+              title="Open New Private Tab (Isolated In-Memory Session)"
+              onClick={() => window.kinetic.createTab(undefined, { isPrivate: true })}
+            >
+              <EyeOff size={14} />
+            </button>
           </div>
 
-          {/* FRAMELESS WINDOW CONTROLS */}
           <div className="kb-window-controls">
             <button
               type="button"
@@ -253,7 +359,12 @@ export default function App(): JSX.Element {
           </div>
 
           <form className="kb-omnibox-form" onSubmit={handleNavigateSubmit}>
-            {activeTab?.hasCertError ? (
+            {activeTab?.isPrivate ? (
+              <span className="kb-security-badge private" title="Private Browsing Tab (No History Saved)">
+                <EyeOff size={12} />
+                <span>PRIVATE</span>
+              </span>
+            ) : activeTab?.hasCertError ? (
               <span className="kb-security-badge error" title="Invalid TLS Certificate Blocked">
                 <ShieldAlert size={13} />
                 <span>CERT ERROR</span>
@@ -264,7 +375,7 @@ export default function App(): JSX.Element {
                 <span>HTTPS</span>
               </span>
             ) : (
-              <span className="kb-security-badge insecure" title="Unencrypted or Local Connection">
+              <span className="kb-security-badge insecure" title="Unencrypted Connection">
                 <ShieldAlert size={13} />
                 <span>HTTP</span>
               </span>
@@ -283,6 +394,15 @@ export default function App(): JSX.Element {
               placeholder={`Search with ${SEARCH_ENGINES[settings.searchEngine]?.name || 'DuckDuckGo'} or enter address...`}
               spellCheck={false}
             />
+
+            <button
+              type="button"
+              className={`kb-star-btn ${currentBookmark ? 'bookmarked' : ''}`}
+              onClick={handleToggleBookmarkActiveTab}
+              title={currentBookmark ? 'Remove Bookmark' : 'Bookmark This Page'}
+            >
+              <Star size={15} fill={currentBookmark ? 'currentColor' : 'none'} />
+            </button>
           </form>
 
           <div className="kb-nav-group">
@@ -309,6 +429,43 @@ export default function App(): JSX.Element {
 
             <button
               type="button"
+              className={`kb-icon-btn ${activeDrawer === 'bookmarks' ? 'active' : ''}`}
+              onClick={() => toggleDrawerPanel('bookmarks')}
+              title="Bookmarks Manager"
+            >
+              <Bookmark size={15} />
+            </button>
+
+            <button
+              type="button"
+              className={`kb-icon-btn ${activeDrawer === 'history' ? 'active' : ''}`}
+              onClick={() => toggleDrawerPanel('history')}
+              title="Browsing History"
+            >
+              <History size={15} />
+            </button>
+
+            <button
+              type="button"
+              className={`kb-icon-btn ${activeDrawer === 'downloads' ? 'active' : ''}`}
+              onClick={() => toggleDrawerPanel('downloads')}
+              title="Downloads Manager"
+            >
+              <Download size={15} />
+              {hasActiveDownloads && <span className="kb-badge-dot" />}
+            </button>
+
+            <button
+              type="button"
+              className={`kb-icon-btn ${activeDrawer === 'profiles' ? 'active' : ''}`}
+              onClick={() => toggleDrawerPanel('profiles')}
+              title="User Profiles & Sessions"
+            >
+              <Users size={15} />
+            </button>
+
+            <button
+              type="button"
               className="kb-icon-btn"
               onClick={() => window.kinetic.toggleDevTools()}
               title="Toggle Chromium Developer Tools"
@@ -318,113 +475,457 @@ export default function App(): JSX.Element {
 
             <button
               type="button"
-              className={`kb-icon-btn ${isSettingsOpen ? 'active' : ''}`}
-              onClick={toggleSettingsDrawer}
-              title="Quick Settings & Customization"
+              className={`kb-icon-btn ${activeDrawer === 'settings' ? 'active' : ''}`}
+              onClick={() => toggleDrawerPanel('settings')}
+              title="Browser Settings"
             >
               <Settings size={16} />
             </button>
           </div>
         </div>
+
+        {/* ROW 3: BOOKMARKS BAR */}
+        {settings.showBookmarksBar && (
+          <div className="kb-bookmarks-bar">
+            {bookmarks.map((bm) => (
+              <button
+                key={bm.id}
+                type="button"
+                className="kb-bm-pill"
+                onClick={() => window.kinetic.navigate(bm.url)}
+                onAuxClick={(e) => {
+                  if (e.button === 1) window.kinetic.createTab(bm.url)
+                }}
+                title={`${bm.title}\n${bm.url} (${bm.folder})`}
+              >
+                <Star size={11} color="var(--kb-accent)" />
+                <span>{bm.title}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </header>
 
       {/* WORKSPACE AREA */}
       <main className="kb-workspace">
-        {/* Native WebContentsView is composited directly over this area by Main Process */}
         <div className="kb-webview-placeholder" />
 
-        {isSettingsOpen && (
+        {activeDrawer !== 'none' && (
           <aside className="kb-settings-drawer">
             <div className="kb-drawer-header">
-              <span className="kb-drawer-title">KINETIC FOUNDATION SETTINGS</span>
+              <span className="kb-drawer-title">{activeDrawer} MANAGER</span>
               <button
                 type="button"
                 className="kb-tab-action-btn"
-                onClick={toggleSettingsDrawer}
-                title="Close Settings"
+                onClick={() => toggleDrawerPanel('none')}
+                title="Close Drawer"
               >
                 <X size={15} />
               </button>
             </div>
 
-            <div className="kb-setting-group">
-              <label className="kb-setting-label">Default Search Engine</label>
-              <span className="kb-setting-desc">
-                Used whenever you type a search query into the omnibox.
-              </span>
-              <select
-                className="kb-select"
-                value={settings.searchEngine}
-                onChange={(e) =>
-                  window.kinetic.updateSettings({
-                    searchEngine: e.target.value as SearchEngineId
-                  })
-                }
-              >
-                {Object.values(SEARCH_ENGINES).map((engine) => (
-                  <option key={engine.id} value={engine.id}>
-                    {engine.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* PANEL 1: BOOKMARKS */}
+            {activeDrawer === 'bookmarks' && (
+              <>
+                <div className="kb-setting-group">
+                  <label className="kb-setting-label">Filter by Folder</label>
+                  <select
+                    className="kb-select"
+                    value={selectedFolder}
+                    onChange={(e) => setSelectedFolder(e.target.value)}
+                  >
+                    <option value="ALL">All Folders ({bookmarks.length})</option>
+                    {bookmarkFolders.map((folder) => (
+                      <option key={folder} value={folder}>
+                        {folder}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-            <div className="kb-setting-group">
-              <label className="kb-setting-label">Primary Accent Color</label>
-              <span className="kb-setting-desc">
-                Live preview of the CSS Token Engine (expanded in Phase 4).
-              </span>
-              <div className="kb-color-row">
-                {ACCENT_PRESETS.map((hex) => (
-                  <button
-                    key={hex}
-                    type="button"
-                    className="kb-color-Swatch"
-                    style={{
-                      backgroundColor: hex,
-                      borderColor: settings.accentColor === hex ? '#ffffff' : 'transparent'
-                    }}
-                    onClick={() => window.kinetic.updateSettings({ accentColor: hex })}
-                    title={hex}
+                <form className="kb-btn-row" onSubmit={handleCreateFolder}>
+                  <input
+                    type="text"
+                    className="kb-input"
+                    style={{ flex: 1 }}
+                    placeholder="New folder name..."
+                    value={newFolderInput}
+                    onChange={(e) => setNewFolderInput(e.target.value)}
                   />
-                ))}
-                <input
-                  type="color"
-                  value={settings.accentColor}
-                  onChange={(e) => window.kinetic.updateSettings({ accentColor: e.target.value })}
-                  style={{ width: 32, height: 28, background: 'transparent', border: 'none' }}
-                />
-              </div>
-            </div>
+                  <button type="submit" className="kb-btn" style={{ flex: '0 0 auto' }}>
+                    <FolderPlus size={14} />
+                  </button>
+                </form>
 
-            <div className="kb-setting-group">
-              <label className="kb-setting-label">Homepage URL</label>
-              <input
-                type="text"
-                className="kb-input"
-                value={homepageDraft}
-                onChange={(e) => setHomepageDraft(e.target.value)}
-              />
-            </div>
+                <div className="kb-list-container">
+                  {filteredBookmarks.length === 0 ? (
+                    <div className="kb-empty-state">No bookmarks in this folder yet.</div>
+                  ) : (
+                    filteredBookmarks.map((bm) => (
+                      <div key={bm.id} className="kb-card-item">
+                        <div
+                          className="kb-card-main"
+                          onClick={() => window.kinetic.navigate(bm.url)}
+                        >
+                          <span className="kb-card-title">{bm.title}</span>
+                          <span className="kb-card-sub">
+                            [{bm.folder}] {bm.url}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="kb-tab-action-btn"
+                          onClick={() => window.kinetic.removeBookmark(bm.id)}
+                          title="Delete Bookmark"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
 
-            <div className="kb-setting-group">
-              <label className="kb-setting-label">New Tab Default URL</label>
-              <input
-                type="text"
-                className="kb-input"
-                value={newTabDraft}
-                onChange={(e) => setNewTabDraft(e.target.value)}
-              />
-            </div>
+            {/* PANEL 2: HISTORY */}
+            {activeDrawer === 'history' && (
+              <>
+                <div className="kb-btn-row">
+                  <input
+                    type="text"
+                    className="kb-input"
+                    style={{ flex: 1 }}
+                    placeholder="Search browsing history..."
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="kb-btn danger"
+                    style={{ flex: '0 0 auto' }}
+                    onClick={() => window.kinetic.clearHistory()}
+                    title="Clear All Profile History"
+                  >
+                    Clear
+                  </button>
+                </div>
 
-            <div className="kb-btn-row">
-              <button type="button" className="kb-btn primary" onClick={handleSaveSettings}>
-                Save URLs
-              </button>
-              <button type="button" className="kb-btn" onClick={handleResetSettings}>
-                Reset Defaults
-              </button>
-            </div>
+                <div className="kb-list-container">
+                  {filteredHistory.length === 0 ? (
+                    <div className="kb-empty-state">No browsing history recorded for this profile.</div>
+                  ) : (
+                    filteredHistory.map((item) => (
+                      <div key={item.id} className="kb-card-item">
+                        <div
+                          className="kb-card-main"
+                          onClick={() => window.kinetic.navigate(item.url)}
+                        >
+                          <span className="kb-card-title">{item.title}</span>
+                          <span className="kb-card-sub">
+                            {new Date(item.visitedAt).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}{' '}
+                            • {item.visitCount}x • {item.url}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="kb-tab-action-btn"
+                          onClick={() => window.kinetic.deleteHistoryItem(item.id)}
+                          title="Remove from History"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* PANEL 3: DOWNLOADS */}
+            {activeDrawer === 'downloads' && (
+              <>
+                <div className="kb-btn-row">
+                  <button
+                    type="button"
+                    className="kb-btn"
+                    onClick={() => window.kinetic.clearCompletedDownloads()}
+                  >
+                    Clear Completed Downloads
+                  </button>
+                </div>
+
+                <div className="kb-list-container">
+                  {downloads.length === 0 ? (
+                    <div className="kb-empty-state">No downloads yet.</div>
+                  ) : (
+                    downloads.map((dl) => {
+                      const percent =
+                        dl.totalBytes > 0
+                          ? Math.min(100, Math.round((dl.receivedBytes / dl.totalBytes) * 100))
+                          : 0
+                      return (
+                        <div
+                          key={dl.id}
+                          className="kb-card-item"
+                          style={{ flexDirection: 'column', alignItems: 'stretch' }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                            <div className="kb-card-main">
+                              <span className="kb-card-title">{dl.fileName}</span>
+                              <span className="kb-card-sub">
+                                {dl.status.toUpperCase()} • {formatBytes(dl.receivedBytes)}
+                                {dl.totalBytes > 0 ? ` / ${formatBytes(dl.totalBytes)} (${percent}%)` : ''}
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              {dl.status === 'progressing' && (
+                                <button
+                                  type="button"
+                                  className="kb-tab-action-btn"
+                                  onClick={() => window.kinetic.pauseDownload(dl.id)}
+                                  title="Pause"
+                                >
+                                  <Pause size={13} />
+                                </button>
+                              )}
+                              {dl.status === 'paused' && (
+                                <button
+                                  type="button"
+                                  className="kb-tab-action-btn"
+                                  onClick={() => window.kinetic.resumeDownload(dl.id)}
+                                  title="Resume"
+                                >
+                                  <Play size={13} />
+                                </button>
+                              )}
+                              {(dl.status === 'progressing' || dl.status === 'paused') && (
+                                <button
+                                  type="button"
+                                  className="kb-tab-action-btn"
+                                  onClick={() => window.kinetic.cancelDownload(dl.id)}
+                                  title="Cancel"
+                                >
+                                  <X size={13} />
+                                </button>
+                              )}
+                              {dl.status === 'completed' && (
+                                <button
+                                  type="button"
+                                  className="kb-tab-action-btn"
+                                  onClick={() => window.kinetic.showDownloadInFolder(dl.id)}
+                                  title="Show in Explorer"
+                                >
+                                  <FolderOpen size={13} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {(dl.status === 'progressing' || dl.status === 'paused') && (
+                            <div className="kb-progress-track">
+                              <div
+                                className="kb-progress-fill"
+                                style={{ width: `${percent}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* PANEL 4: USER PROFILES */}
+            {activeDrawer === 'profiles' && (
+              <>
+                <span className="kb-setting-desc">
+                  Each profile has isolated cookies, login sessions, cache, and saved tabs.
+                </span>
+
+                <form className="kb-setting-group" onSubmit={handleCreateProfile}>
+                  <label className="kb-setting-label">Create New Profile</label>
+                  <div className="kb-btn-row">
+                    <input
+                      type="text"
+                      className="kb-input"
+                      style={{ flex: 1 }}
+                      placeholder="Profile name (e.g. Streaming)"
+                      value={newProfileName}
+                      onChange={(e) => setNewProfileName(e.target.value)}
+                    />
+                    <input
+                      type="color"
+                      value={newProfileColor}
+                      onChange={(e) => setNewProfileColor(e.target.value)}
+                      style={{ width: 32, height: 32, border: 'none', background: 'transparent' }}
+                    />
+                    <button type="submit" className="kb-btn primary" style={{ flex: '0 0 auto' }}>
+                      Add
+                    </button>
+                  </div>
+                </form>
+
+                <div className="kb-list-container">
+                  {profiles.map((prof) => {
+                    const isCurrent = prof.id === activeProfileId
+                    return (
+                      <div key={prof.id} className="kb-card-item">
+                        <div
+                          className="kb-card-main"
+                          onClick={() => window.kinetic.switchProfile(prof.id)}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span
+                              className="kb-profile-dot"
+                              style={{ backgroundColor: prof.color }}
+                            />
+                            <span className="kb-card-title">
+                              {prof.name} {isCurrent ? '(Active)' : ''}
+                            </span>
+                          </div>
+                          <span className="kb-card-sub">Partition: persist:kinetic-profile-{prof.id}</span>
+                        </div>
+                        {prof.id !== 'default' && (
+                          <button
+                            type="button"
+                            className="kb-tab-action-btn"
+                            onClick={() => window.kinetic.deleteProfile(prof.id)}
+                            title="Delete Profile"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+
+            {/* PANEL 5: SETTINGS */}
+            {activeDrawer === 'settings' && (
+              <>
+                <div className="kb-setting-group">
+                  <label className="kb-setting-label">Default Search Engine</label>
+                  <select
+                    className="kb-select"
+                    value={settings.searchEngine}
+                    onChange={(e) =>
+                      window.kinetic.updateSettings({
+                        searchEngine: e.target.value as SearchEngineId
+                      })
+                    }
+                  >
+                    {Object.values(SEARCH_ENGINES).map((engine) => (
+                      <option key={engine.id} value={engine.id}>
+                        {engine.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="kb-checkbox-row">
+                  <div>
+                    <div className="kb-setting-label">Restore Previous Session</div>
+                    <div className="kb-setting-desc">Reopen last open tabs on browser launch</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.restorePreviousSession}
+                    onChange={(e) =>
+                      window.kinetic.updateSettings({
+                        restorePreviousSession: e.target.checked
+                      })
+                    }
+                  />
+                </div>
+
+                <div className="kb-checkbox-row">
+                  <div>
+                    <div className="kb-setting-label">Show Bookmarks Bar</div>
+                    <div className="kb-setting-desc">Display quick bookmarks under address bar</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.showBookmarksBar}
+                    onChange={(e) =>
+                      window.kinetic.updateSettings({
+                        showBookmarksBar: e.target.checked
+                      })
+                    }
+                  />
+                </div>
+
+                <div className="kb-setting-group">
+                  <label className="kb-setting-label">Primary Accent Color</label>
+                  <div className="kb-color-row">
+                    {ACCENT_PRESETS.map((hex) => (
+                      <button
+                        key={hex}
+                        type="button"
+                        className="kb-color-Swatch"
+                        style={{
+                          backgroundColor: hex,
+                          borderColor: settings.accentColor === hex ? '#ffffff' : 'transparent'
+                        }}
+                        onClick={() => window.kinetic.updateSettings({ accentColor: hex })}
+                      />
+                    ))}
+                    <input
+                      type="color"
+                      value={settings.accentColor}
+                      onChange={(e) =>
+                        window.kinetic.updateSettings({ accentColor: e.target.value })
+                      }
+                      style={{ width: 30, height: 26, background: 'transparent', border: 'none' }}
+                    />
+                  </div>
+                </div>
+
+                <div className="kb-setting-group">
+                  <label className="kb-setting-label">Homepage URL</label>
+                  <input
+                    type="text"
+                    className="kb-input"
+                    value={homepageDraft}
+                    onChange={(e) => setHomepageDraft(e.target.value)}
+                  />
+                </div>
+
+                <div className="kb-setting-group">
+                  <label className="kb-setting-label">New Tab Default URL</label>
+                  <input
+                    type="text"
+                    className="kb-input"
+                    value={newTabDraft}
+                    onChange={(e) => setNewTabDraft(e.target.value)}
+                  />
+                </div>
+
+                <div className="kb-btn-row">
+                  <button type="button" className="kb-btn primary" onClick={handleSaveSettings}>
+                    Save URLs
+                  </button>
+                  <button
+                    type="button"
+                    className="kb-btn"
+                    onClick={async () => {
+                      const defaults = await window.kinetic.resetSettings()
+                      setHomepageDraft(defaults.homepageUrl)
+                      setNewTabDraft(defaults.newTabUrl)
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </>
+            )}
           </aside>
         )}
       </main>

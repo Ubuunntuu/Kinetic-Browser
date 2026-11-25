@@ -1,6 +1,6 @@
 {
   "name": "kinetic-browser",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Kinetic Browser - High-performance, ultra-customizable gaming & privacy desktop browser",
   "main": "./out/main/index.js",
   "author": "Kinetic Browser Engineering Team",

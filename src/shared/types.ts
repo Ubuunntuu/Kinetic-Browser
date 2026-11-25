@@ -1,5 +1,7 @@
 export type SearchEngineId = 'duckduckgo' | 'google' | 'brave' | 'bing' | 'startpage'
 
+export type DrawerPanelId = 'none' | 'bookmarks' | 'history' | 'downloads' | 'profiles' | 'settings'
+
 export interface SearchEngineConfig {
   id: SearchEngineId
   name: string
@@ -52,7 +54,54 @@ export interface TabState {
   hasCertError: boolean
   isAudioPlaying: boolean
   isMuted: boolean
+  isPinned: boolean
+  isPrivate: boolean
+  profileId: string
   customColor?: string
+}
+
+export interface HistoryEntry {
+  id: string
+  url: string
+  title: string
+  favicon: string
+  visitedAt: number
+  visitCount: number
+  profileId: string
+}
+
+export interface BookmarkItem {
+  id: string
+  title: string
+  url: string
+  favicon: string
+  folder: string
+  createdAt: number
+}
+
+export type DownloadStatus = 'progressing' | 'completed' | 'cancelled' | 'interrupted' | 'paused'
+
+export interface DownloadEntry {
+  id: string
+  fileName: string
+  url: string
+  savePath: string
+  receivedBytes: number
+  totalBytes: number
+  status: DownloadStatus
+  startedAt: number
+}
+
+export interface UserProfile {
+  id: string
+  name: string
+  color: string
+  createdAt: number
+}
+
+export interface SavedSessionTab {
+  url: string
+  title: string
   isPinned: boolean
 }
 
@@ -61,6 +110,7 @@ export interface BrowserSettings {
   homepageUrl: string
   newTabUrl: string
   restorePreviousSession: boolean
+  showBookmarksBar: boolean
   accentColor: string
   chromeHeight: number
   sidebarOpenWidth: number
@@ -72,9 +122,10 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
   homepageUrl: 'https://duckduckgo.com',
   newTabUrl: 'https://duckduckgo.com',
   restorePreviousSession: true,
+  showBookmarksBar: true,
   accentColor: '#00f0ff',
   chromeHeight: 84,
-  sidebarOpenWidth: 360,
+  sidebarOpenWidth: 380,
   enableSmoothScrolling: true
 }
 
@@ -83,11 +134,17 @@ export interface BrowserStatePayload {
   activeTabId: string | null
   isMaximized: boolean
   settings: BrowserSettings
+  history: HistoryEntry[]
+  bookmarks: BookmarkItem[]
+  bookmarkFolders: string[]
+  downloads: DownloadEntry[]
+  profiles: UserProfile[]
+  activeProfileId: string
 }
 
 export interface KineticAPI {
   // Tab Management
-  createTab: (url?: string) => Promise<string>
+  createTab: (url?: string, options?: { isPrivate?: boolean }) => Promise<string>
   closeTab: (tabId: string) => Promise<void>
   switchTab: (tabId: string) => Promise<void>
   duplicateTab: (tabId: string) => Promise<string>
@@ -102,6 +159,27 @@ export interface KineticAPI {
   stop: () => Promise<void>
   goHome: () => Promise<void>
   toggleDevTools: () => Promise<void>
+
+  // History Subsystem
+  deleteHistoryItem: (id: string) => Promise<void>
+  clearHistory: () => Promise<void>
+
+  // Bookmarks Subsystem
+  addBookmark: (data: { title: string; url: string; favicon?: string; folder?: string }) => Promise<BookmarkItem>
+  removeBookmark: (id: string) => Promise<void>
+  createBookmarkFolder: (folderName: string) => Promise<string[]>
+
+  // Downloads Subsystem
+  pauseDownload: (id: string) => Promise<void>
+  resumeDownload: (id: string) => Promise<void>
+  cancelDownload: (id: string) => Promise<void>
+  showDownloadInFolder: (id: string) => Promise<void>
+  clearCompletedDownloads: () => Promise<void>
+
+  // Profiles Subsystem
+  createProfile: (name: string, color: string) => Promise<UserProfile>
+  switchProfile: (profileId: string) => Promise<void>
+  deleteProfile: (profileId: string) => Promise<void>
 
   // Layout & Overlays
   setRightDrawerOpen: (isOpen: boolean, width?: number) => Promise<void>

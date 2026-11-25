@@ -7,11 +7,12 @@
   --kb-text-primary: #f0f3f8;
   --kb-text-secondary: #8c95aa;
   --kb-accent: #00f0ff;
+  --kb-private: #b537f2;
   --kb-danger: #ff3b5c;
   --kb-secure: #00e599;
   --kb-warning: #ffb800;
-  --kb-chrome-height: 84px;
-  --kb-drawer-width: 360px;
+  --kb-chrome-height: 112px;
+  --kb-drawer-width: 380px;
 }
 
 * {
@@ -41,14 +42,12 @@ body,
   height: 100vh;
 }
 
-/* Top Chrome Area (Tab Strip + Navigation Omnibox) */
 .kb-chrome {
   height: var(--kb-chrome-height);
   background: linear-gradient(180deg, #0b0d14 0%, #10131d 100%);
   border-bottom: 1px solid var(--kb-border);
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
 }
 
 /* Row 1: Tab Bar & Window Controls */
@@ -77,6 +76,28 @@ body,
   -webkit-app-region: no-drag;
 }
 
+.kb-profile-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  margin-right: 6px;
+  border-radius: 6px;
+  background: var(--kb-bg-elevated);
+  border: 1px solid var(--kb-border);
+  color: var(--kb-text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.kb-profile-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
 .kb-tabs-container {
   display: flex;
   align-items: center;
@@ -95,9 +116,9 @@ body,
 .kb-tab {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   height: 30px;
-  min-width: 140px;
+  min-width: 135px;
   max-width: 220px;
   padding: 0 10px;
   border-radius: 6px;
@@ -106,12 +127,11 @@ body,
   color: var(--kb-text-secondary);
   cursor: pointer;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-  position: relative;
 }
 
 .kb-tab.pinned {
-  min-width: 42px;
-  max-width: 42px;
+  min-width: 40px;
+  max-width: 40px;
   justify-content: center;
   padding: 0 6px;
 }
@@ -126,6 +146,25 @@ body,
   border-color: var(--kb-accent);
   color: var(--kb-text-primary);
   box-shadow: 0 0 12px rgba(0, 240, 255, 0.14);
+}
+
+.kb-tab.private {
+  border-color: rgba(181, 55, 242, 0.35);
+}
+
+.kb-tab.private.active {
+  border-color: var(--kb-private);
+  box-shadow: 0 0 12px rgba(181, 55, 242, 0.25);
+}
+
+.kb-private-tag {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(181, 55, 242, 0.22);
+  color: #d896ff;
+  letter-spacing: 0.4px;
 }
 
 .kb-tab-favicon {
@@ -182,6 +221,11 @@ body,
   color: var(--kb-accent);
 }
 
+.kb-newtab-btn.private:hover {
+  border-color: var(--kb-private);
+  color: #d896ff;
+}
+
 .kb-window-controls {
   display: flex;
   align-items: center;
@@ -200,7 +244,6 @@ body,
   background: transparent;
   color: var(--kb-text-secondary);
   cursor: pointer;
-  transition: background 100ms ease, color 100ms ease;
 }
 
 .kb-win-btn:hover {
@@ -240,6 +283,7 @@ body,
   color: var(--kb-text-primary);
   cursor: pointer;
   transition: all 120ms ease;
+  position: relative;
 }
 
 .kb-icon-btn:hover:not(:disabled) {
@@ -259,6 +303,16 @@ body,
   cursor: default;
 }
 
+.kb-badge-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--kb-accent);
+}
+
 /* Omnibox / Address Bar */
 .kb-omnibox-form {
   display: flex;
@@ -268,7 +322,7 @@ body,
   background: #07080c;
   border: 1px solid var(--kb-border);
   border-radius: 8px;
-  padding: 0 10px;
+  padding: 0 8px;
   gap: 8px;
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
@@ -303,6 +357,11 @@ body,
   background: rgba(255, 59, 92, 0.15);
 }
 
+.kb-security-badge.private {
+  color: #d896ff;
+  background: rgba(181, 55, 242, 0.18);
+}
+
 .kb-omnibox-input {
   flex: 1;
   height: 100%;
@@ -314,7 +373,66 @@ body,
   user-select: text;
 }
 
-/* Lower Workspace Area (Left: WebContentsView viewport, Right: Settings Drawer) */
+.kb-star-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--kb-text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.kb-star-btn.bookmarked {
+  color: var(--kb-warning);
+}
+
+.kb-star-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Row 3: Bookmarks Bar */
+.kb-bookmarks-bar {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px;
+  gap: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(7, 8, 12, 0.65);
+  overflow-x: auto;
+}
+
+.kb-bookmarks-bar::-webkit-scrollbar {
+  height: 0px;
+}
+
+.kb-bm-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
+  color: var(--kb-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.kb-bm-pill:hover {
+  background: var(--kb-bg-hover);
+  border-color: var(--kb-border);
+  color: var(--kb-text-primary);
+}
+
+/* Workspace & Right Multi-Panel Drawer */
 .kb-workspace {
   display: flex;
   flex: 1;
@@ -335,8 +453,8 @@ body,
   border-left: 1px solid var(--kb-border);
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  gap: 16px;
+  padding: 14px;
+  gap: 12px;
   overflow-y: auto;
 }
 
@@ -344,15 +462,80 @@ body,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 12px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--kb-border);
 }
 
 .kb-drawer-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.5px;
   color: var(--kb-accent);
+  text-transform: uppercase;
+}
+
+.kb-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.kb-card-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #0a0c12;
+  border: 1px solid var(--kb-border);
+}
+
+.kb-card-item:hover {
+  border-color: rgba(0, 240, 255, 0.35);
+}
+
+.kb-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.kb-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--kb-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kb-card-sub {
+  font-size: 11px;
+  color: var(--kb-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kb-progress-track {
+  width: 100%;
+  height: 5px;
+  border-radius: 3px;
+  background: #1a1e2e;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.kb-progress-fill {
+  height: 100%;
+  background: var(--kb-accent);
+  transition: width 150ms ease;
 }
 
 .kb-setting-group {
@@ -374,7 +557,7 @@ body,
 
 .kb-input,
 .kb-select {
-  height: 34px;
+  height: 32px;
   padding: 0 10px;
   border-radius: 6px;
   border: 1px solid var(--kb-border);
@@ -389,6 +572,13 @@ body,
   border-color: var(--kb-accent);
 }
 
+.kb-checkbox-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+
 .kb-color-row {
   display: flex;
   align-items: center;
@@ -396,8 +586,8 @@ body,
 }
 
 .kb-color-Swatch {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   border-radius: 6px;
   border: 2px solid var(--kb-border);
   cursor: pointer;
@@ -407,12 +597,12 @@ body,
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
 }
 
 .kb-btn {
   flex: 1;
-  height: 34px;
+  height: 32px;
+  padding: 0 10px;
   border-radius: 6px;
   border: 1px solid var(--kb-border);
   background: var(--kb-bg-active);
@@ -420,7 +610,6 @@ body,
   font-weight: 600;
   font-size: 12px;
   cursor: pointer;
-  transition: all 120ms ease;
 }
 
 .kb-btn.primary {
@@ -429,6 +618,15 @@ body,
   border-color: var(--kb-accent);
 }
 
-.kb-btn:hover {
-  filter: brightness(1.1);
+.kb-btn.danger {
+  background: rgba(255, 59, 92, 0.15);
+  color: var(--kb-danger);
+  border-color: rgba(255, 59, 92, 0.35);
+}
+
+.kb-empty-state {
+  text-align: center;
+  padding: 28px 12px;
+  color: var(--kb-text-secondary);
+  font-size: 12px;
 }
