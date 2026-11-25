@@ -39,6 +39,7 @@ import {
   DrawerPanelId,
   HistoryEntry,
   KINETIC_NEWTAB_URL,
+  QuickLinkItem,
   SEARCH_ENGINES,
   SearchEngineId,
   TabState,
@@ -49,55 +50,12 @@ const ACCENT_PRESETS = ['#00f0ff', '#ff2a6d', '#05d550', '#b537f2', '#ff8a00', '
 
 function getSiteFaviconUrl(siteUrl: string, size: number = 64): string {
   try {
-    const parsed = new URL(siteUrl)
+    const parsed = new URL(siteUrl.startsWith('http') ? siteUrl : `https://${siteUrl}`)
     return `https://www.google.com/s2/favicons?domain=${parsed.hostname}&sz=${size}`
   } catch {
     return ''
   }
 }
-
-const QUICK_LINKS = [
-  {
-    title: 'YouTube',
-    url: 'https://www.youtube.com',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=youtube.com&sz=64'
-  },
-  {
-    title: 'Twitch',
-    url: 'https://www.twitch.tv',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=twitch.tv&sz=64'
-  },
-  {
-    title: 'Steam',
-    url: 'https://store.steampowered.com',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=store.steampowered.com&sz=64'
-  },
-  {
-    title: 'Discord',
-    url: 'https://discord.com/app',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=discord.com&sz=64'
-  },
-  {
-    title: 'Reddit',
-    url: 'https://www.reddit.com',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=reddit.com&sz=64'
-  },
-  {
-    title: 'Spotify',
-    url: 'https://open.spotify.com',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=open.spotify.com&sz=64'
-  },
-  {
-    title: 'GitHub',
-    url: 'https://github.com/Ubuunntuu/Kinetic-Browser',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=github.com&sz=64'
-  },
-  {
-    title: 'PCGamingWiki',
-    url: 'https://www.pcgamingwiki.com',
-    iconUrl: 'https://www.google.com/s2/favicons?domain=pcgamingwiki.com&sz=64'
-  }
-]
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B'
@@ -114,6 +72,7 @@ export default function App(): JSX.Element {
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([])
   const [bookmarkFolders, setBookmarkFolders] = useState<string[]>(['Bookmarks Bar'])
+  const [quickLinks, setQuickLinks] = useState<QuickLinkItem[]>([])
   const [downloads, setDownloads] = useState<DownloadEntry[]>([])
   const [profiles, setProfiles] = useState<UserProfile[]>([])
   const [activeProfileId, setActiveProfileId] = useState<string>('default')
@@ -123,6 +82,16 @@ export default function App(): JSX.Element {
   const [isAddressFocused, setIsAddressFocused] = useState<boolean>(false)
   const [activeDrawer, setActiveDrawer] = useState<DrawerPanelId>('none')
   const [clockNow, setClockNow] = useState<Date>(new Date())
+
+  // Custom Quick Link Form (New Tab Studio)
+  const [isAddingQuickLink, setIsAddingQuickLink] = useState<boolean>(false)
+  const [customQuickTitle, setCustomQuickTitle] = useState<string>('')
+  const [customQuickUrl, setCustomQuickUrl] = useState<string>('')
+
+  // Custom Bookmark Form (Bookmarks Manager)
+  const [customBmTitle, setCustomBmTitle] = useState<string>('')
+  const [customBmUrl, setCustomBmUrl] = useState<string>('')
+  const [customBmFolder, setCustomBmFolder] = useState<string>('Bookmarks Bar')
 
   // Panel Filters & Forms
   const [historySearch, setHistorySearch] = useState<string>('')
@@ -154,6 +123,7 @@ export default function App(): JSX.Element {
       setHistory(payload.history || [])
       setBookmarks(payload.bookmarks || [])
       setBookmarkFolders(payload.bookmarkFolders || ['Bookmarks Bar'])
+      setQuickLinks(payload.quickLinks || [])
       setDownloads(payload.downloads || [])
       setProfiles(payload.profiles || [])
       setActiveProfileId(payload.activeProfileId || 'default')
@@ -194,6 +164,11 @@ export default function App(): JSX.Element {
     window.kinetic.setRightDrawerOpen(next !== 'none', settings.sidebarOpenWidth)
   }
 
+  const openDrawerPanel = (panel: DrawerPanelId): void => {
+    setActiveDrawer(panel)
+    window.kinetic.setRightDrawerOpen(true, settings.sidebarOpenWidth)
+  }
+
   const handleNavigateSubmit = (e: React.FormEvent): void => {
     e.preventDefault()
     window.kinetic.navigate(addressInput)
@@ -205,6 +180,30 @@ export default function App(): JSX.Element {
     if (!newTabSearchQuery.trim()) return
     window.kinetic.navigate(newTabSearchQuery)
     setNewTabSearchQuery('')
+  }
+
+  const handleAddQuickLinkSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    if (!customQuickUrl.trim()) return
+    await window.kinetic.addQuickLink({
+      title: customQuickTitle.trim() || customQuickUrl.trim(),
+      url: customQuickUrl.trim()
+    })
+    setCustomQuickTitle('')
+    setCustomQuickUrl('')
+    setIsAddingQuickLink(false)
+  }
+
+  const handleAddCustomBookmarkSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    if (!customBmUrl.trim()) return
+    await window.kinetic.addBookmark({
+      title: customBmTitle.trim() || customBmUrl.trim(),
+      url: customBmUrl.trim(),
+      folder: customBmFolder
+    })
+    setCustomBmTitle('')
+    setCustomBmUrl('')
   }
 
   const handleToggleBookmarkActiveTab = async (): Promise<void> => {
@@ -544,7 +543,7 @@ export default function App(): JSX.Element {
           </div>
         </div>
 
-        {/* ROW 3: BOOKMARKS BAR WITH REAL SITE FAVICONS */}
+        {/* ROW 3: BOOKMARKS BAR (YouTube, Steam, Discord + User Custom Bookmarks) */}
         {settings.showBookmarksBar && (
           <div className="kb-bookmarks-bar">
             {bookmarks.map((bm) => {
@@ -558,7 +557,11 @@ export default function App(): JSX.Element {
                   onAuxClick={(e) => {
                     if (e.button === 1) window.kinetic.createTab(bm.url)
                   }}
-                  title={`${bm.title}\n${bm.url}`}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    window.kinetic.removeBookmark(bm.id)
+                  }}
+                  title={`${bm.title}\n${bm.url}\n(Right-click to remove)`}
                 >
                   {iconSrc ? (
                     <img src={iconSrc} alt="" className="kb-bm-icon" />
@@ -569,6 +572,16 @@ export default function App(): JSX.Element {
                 </button>
               )
             })}
+
+            <button
+              type="button"
+              className="kb-bm-pill add-pill"
+              onClick={() => openDrawerPanel('bookmarks')}
+              title="Add a Custom Bookmark"
+            >
+              <Plus size={12} />
+              <span>Add Bookmark</span>
+            </button>
           </div>
         )}
       </header>
@@ -625,11 +638,11 @@ export default function App(): JSX.Element {
                 </button>
               </form>
 
-              {/* Speed Dial Grid with Official Site Logos */}
+              {/* Speed Dial Grid: Only YouTube, Steam, Discord + User Custom Shortcuts */}
               <div className="kb-speed-dial-grid">
-                {QUICK_LINKS.map((item) => (
+                {quickLinks.map((item) => (
                   <div
-                    key={item.url}
+                    key={item.id}
                     className="kb-speed-card"
                     onClick={() => window.kinetic.navigate(item.url)}
                     onAuxClick={(e) => {
@@ -637,9 +650,20 @@ export default function App(): JSX.Element {
                     }}
                     title={item.url}
                   >
+                    <button
+                      type="button"
+                      className="kb-speed-remove-btn"
+                      title={`Remove ${item.title}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        window.kinetic.removeQuickLink(item.id)
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
                     <div className="kb-speed-icon-box">
                       <img
-                        src={item.iconUrl}
+                        src={item.iconUrl || getSiteFaviconUrl(item.url, 64)}
                         alt={item.title}
                         className="kb-speed-logo-img"
                       />
@@ -647,7 +671,63 @@ export default function App(): JSX.Element {
                     <span className="kb-speed-label">{item.title}</span>
                   </div>
                 ))}
+
+                {/* + Add Custom Shortcut Button */}
+                <div
+                  className="kb-speed-card add-card"
+                  onClick={() => setIsAddingQuickLink(!isAddingQuickLink)}
+                  title="Add Custom Shortcut to New Tab"
+                >
+                  <div
+                    className="kb-speed-icon-box"
+                    style={{ borderColor: 'rgba(0, 240, 255, 0.3)', color: 'var(--kb-accent)' }}
+                  >
+                    <Plus size={22} />
+                  </div>
+                  <span className="kb-speed-label" style={{ color: 'var(--kb-accent)' }}>
+                    Add Shortcut
+                  </span>
+                </div>
               </div>
+
+              {/* Inline Add Custom Shortcut Form */}
+              {isAddingQuickLink && (
+                <form className="kb-add-shortcut-box" onSubmit={handleAddQuickLinkSubmit}>
+                  <input
+                    type="text"
+                    className="kb-input"
+                    style={{ width: 170 }}
+                    placeholder="Name (e.g. Twitch)"
+                    value={customQuickTitle}
+                    onChange={(e) => setCustomQuickTitle(e.target.value)}
+                    autoFocus
+                  />
+                  <input
+                    type="text"
+                    className="kb-input"
+                    style={{ flex: 1 }}
+                    placeholder="URL (e.g. twitch.tv)"
+                    value={customQuickUrl}
+                    onChange={(e) => setCustomQuickUrl(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="submit"
+                    className="kb-btn primary"
+                    style={{ flex: '0 0 auto', padding: '0 16px' }}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    className="kb-btn"
+                    style={{ flex: '0 0 auto' }}
+                    onClick={() => setIsAddingQuickLink(false)}
+                  >
+                    Cancel
+                  </button>
+                </form>
+              )}
             </div>
           </section>
         ) : (
@@ -670,7 +750,48 @@ export default function App(): JSX.Element {
 
             {activeDrawer === 'bookmarks' && (
               <>
-                <div className="kb-setting-group">
+                {/* Manual Add Custom Bookmark Form */}
+                <form className="kb-setting-group" onSubmit={handleAddCustomBookmarkSubmit}>
+                  <label className="kb-setting-label">Add Custom Bookmark</label>
+                  <input
+                    type="text"
+                    className="kb-input"
+                    placeholder="Title (e.g. Nexus Mods)"
+                    value={customBmTitle}
+                    onChange={(e) => setCustomBmTitle(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    className="kb-input"
+                    placeholder="Website URL (e.g. nexusmods.com)"
+                    value={customBmUrl}
+                    onChange={(e) => setCustomBmUrl(e.target.value)}
+                    required
+                  />
+                  <div className="kb-btn-row">
+                    <select
+                      className="kb-select"
+                      style={{ flex: 1 }}
+                      value={customBmFolder}
+                      onChange={(e) => setCustomBmFolder(e.target.value)}
+                    >
+                      {bookmarkFolders.map((folder) => (
+                        <option key={folder} value={folder}>
+                          {folder}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="submit"
+                      className="kb-btn primary"
+                      style={{ flex: '0 0 auto', padding: '0 14px' }}
+                    >
+                      + Add
+                    </button>
+                  </div>
+                </form>
+
+                <div className="kb-setting-group" style={{ marginTop: 6 }}>
                   <label className="kb-setting-label">Filter by Folder</label>
                   <select
                     className="kb-select"
@@ -691,7 +812,7 @@ export default function App(): JSX.Element {
                     type="text"
                     className="kb-input"
                     style={{ flex: 1 }}
-                    placeholder="New folder name..."
+                    placeholder="Create new folder..."
                     value={newFolderInput}
                     onChange={(e) => setNewFolderInput(e.target.value)}
                   />

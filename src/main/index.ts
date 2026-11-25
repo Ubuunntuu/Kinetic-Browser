@@ -138,6 +138,15 @@ function registerIpcHandlers(): void {
     return browserManager?.createBookmarkFolder(folderName)
   })
 
+  // Quick Links (New Tab Speed Dial)
+  ipcMain.handle('kinetic:add-quick-link', (_e, data: { title: string; url: string }) => {
+    return browserManager?.addQuickLink(data)
+  })
+
+  ipcMain.handle('kinetic:remove-quick-link', (_e, id: string) => {
+    browserManager?.removeQuickLink(id)
+  })
+
   // Downloads
   ipcMain.handle('kinetic:pause-download', (_e, id: string) => {
     browserManager?.pauseDownload(id)

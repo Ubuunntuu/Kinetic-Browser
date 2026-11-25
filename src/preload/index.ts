@@ -26,6 +26,9 @@ const kineticApi: KineticAPI = {
   createBookmarkFolder: (folderName: string) =>
     ipcRenderer.invoke('kinetic:create-bookmark-folder', folderName),
 
+  addQuickLink: (data) => ipcRenderer.invoke('kinetic:add-quick-link', data),
+  removeQuickLink: (id: string) => ipcRenderer.invoke('kinetic:remove-quick-link', id),
+
   pauseDownload: (id: string) => ipcRenderer.invoke('kinetic:pause-download', id),
   resumeDownload: (id: string) => ipcRenderer.invoke('kinetic:resume-download', id),
   cancelDownload: (id: string) => ipcRenderer.invoke('kinetic:cancel-download', id),

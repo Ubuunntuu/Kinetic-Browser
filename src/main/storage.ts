@@ -9,21 +9,26 @@ import {
   DownloadEntry,
   HistoryEntry,
   KINETIC_NEWTAB_URL,
+  QuickLinkItem,
   SavedSessionTab,
   SEARCH_ENGINES,
   UserProfile
 } from '../shared/types'
 
 interface PersistentDatabase {
+  schemaVersion?: number
   settings: BrowserSettings
   history: HistoryEntry[]
   bookmarks: BookmarkItem[]
   bookmarkFolders: string[]
+  quickLinks: QuickLinkItem[]
   downloads: DownloadEntry[]
   profiles: UserProfile[]
   activeProfileId: string
   sessionsByProfile: Record<string, { tabs: SavedSessionTab[]; activeIndex: number }>
 }
+
+const CURRENT_SCHEMA_VERSION = 2
 
 const DEFAULT_PROFILE: UserProfile = {
   id: 'default',
@@ -34,38 +39,67 @@ const DEFAULT_PROFILE: UserProfile = {
 
 const DEFAULT_BOOKMARKS: BookmarkItem[] = [
   {
-    id: 'bm-1',
-    title: 'GitHub - Kinetic Browser',
-    url: 'https://github.com/Ubuunntuu/Kinetic-Browser',
-    favicon: '',
-    folder: 'Bookmarks Bar',
-    createdAt: Date.now()
-  },
-  {
-    id: 'bm-2',
+    id: 'bm-youtube',
     title: 'YouTube',
     url: 'https://www.youtube.com',
-    favicon: '',
+    favicon: 'https://www.google.com/s2/favicons?domain=youtube.com&sz=32',
     folder: 'Bookmarks Bar',
     createdAt: Date.now()
   },
   {
-    id: 'bm-3',
+    id: 'bm-steam',
     title: 'Steam',
     url: 'https://store.steampowered.com',
-    favicon: '',
-    folder: 'Gaming',
+    favicon: 'https://www.google.com/s2/favicons?domain=store.steampowered.com&sz=32',
+    folder: 'Bookmarks Bar',
     createdAt: Date.now()
   },
   {
-    id: 'bm-4',
-    title: 'PCGamingWiki',
-    url: 'https://www.pcgamingwiki.com',
-    favicon: '',
-    folder: 'Gaming',
+    id: 'bm-discord',
+    title: 'Discord',
+    url: 'https://discord.com/app',
+    favicon: 'https://www.google.com/s2/favicons?domain=discord.com&sz=32',
+    folder: 'Bookmarks Bar',
     createdAt: Date.now()
   }
 ]
+
+const DEFAULT_QUICK_LINKS: QuickLinkItem[] = [
+  {
+    id: 'ql-youtube',
+    title: 'YouTube',
+    url: 'https://www.youtube.com',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=youtube.com&sz=64'
+  },
+  {
+    id: 'ql-steam',
+    title: 'Steam',
+    url: 'https://store.steampowered.com',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=store.steampowered.com&sz=64'
+  },
+  {
+    id: 'ql-discord',
+    title: 'Discord',
+    url: 'https://discord.com/app',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=discord.com&sz=64'
+  }
+]
+
+function normalizeWebUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim()
+  if (!trimmed) return 'https://www.google.com'
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
+  return `https://${trimmed}`
+}
+
+function buildFaviconUrl(targetUrl: string, size: number = 64): string {
+  try {
+    const parsed = new URL(targetUrl)
+    return `https://www.google.com/s2/favicons?domain=${parsed.hostname}&sz=${size}`
+  } catch {
+    return ''
+  }
+}
 
 export class SettingsStorage {
   private dbPath: string
@@ -84,11 +118,10 @@ export class SettingsStorage {
         ? s.searchEngine
         : DEFAULT_SETTINGS.searchEngine
 
-    const normalizeUrl = (val: unknown, fallback: string): string => {
+    const normalizeSettingUrl = (val: unknown, fallback: string): string => {
       if (typeof val !== 'string' || !val.trim()) return fallback
       const trimmed = val.trim()
       if (trimmed === KINETIC_NEWTAB_URL) return KINETIC_NEWTAB_URL
-      // Automatically upgrade old hardcoded duckduckgo homepage/newtab to kinetic://newtab
       if (trimmed === 'https://duckduckgo.com') return KINETIC_NEWTAB_URL
       if (/^(https?:\/\/|kinetic:\/\/)/i.test(trimmed)) return trimmed
       return `https://${trimmed}`
@@ -96,8 +129,8 @@ export class SettingsStorage {
 
     return {
       searchEngine: engine,
-      homepageUrl: normalizeUrl(s.homepageUrl, KINETIC_NEWTAB_URL),
-      newTabUrl: normalizeUrl(s.newTabUrl, KINETIC_NEWTAB_URL),
+      homepageUrl: normalizeSettingUrl(s.homepageUrl, KINETIC_NEWTAB_URL),
+      newTabUrl: normalizeSettingUrl(s.newTabUrl, KINETIC_NEWTAB_URL),
       restorePreviousSession:
         typeof s.restorePreviousSession === 'boolean'
           ? s.restorePreviousSession
@@ -143,14 +176,36 @@ export class SettingsStorage {
             ? parsed.activeProfileId
             : profiles[0].id
 
+        // Migrate away from old premade bookmarks (bm-1, bm-2, bm-3, bm-4) to clean YouTube/Steam/Discord defaults
+        let bookmarks: BookmarkItem[] = Array.isArray(parsed.bookmarks)
+          ? parsed.bookmarks
+          : [...DEFAULT_BOOKMARKS]
+
+        if (!parsed.schemaVersion || parsed.schemaVersion < CURRENT_SCHEMA_VERSION) {
+          const oldPremadeIds = new Set(['bm-1', 'bm-2', 'bm-3', 'bm-4'])
+          const userCustomBookmarks = bookmarks.filter((b) => !oldPremadeIds.has(b.id))
+          const existingUrls = new Set(userCustomBookmarks.map((b) => b.url))
+          const cleanDefaults = DEFAULT_BOOKMARKS.filter((d) => !existingUrls.has(d.url))
+          bookmarks = [...cleanDefaults, ...userCustomBookmarks]
+        }
+
+        const quickLinks: QuickLinkItem[] =
+          Array.isArray(parsed.quickLinks) &&
+          parsed.schemaVersion &&
+          parsed.schemaVersion >= CURRENT_SCHEMA_VERSION
+            ? parsed.quickLinks
+            : [...DEFAULT_QUICK_LINKS]
+
         const loaded: PersistentDatabase = {
+          schemaVersion: CURRENT_SCHEMA_VERSION,
           settings: this.validateSettings(parsed.settings),
           history: Array.isArray(parsed.history) ? parsed.history.slice(0, 1500) : [],
-          bookmarks: Array.isArray(parsed.bookmarks) ? parsed.bookmarks : DEFAULT_BOOKMARKS,
+          bookmarks,
           bookmarkFolders:
             Array.isArray(parsed.bookmarkFolders) && parsed.bookmarkFolders.length > 0
               ? parsed.bookmarkFolders
-              : ['Bookmarks Bar', 'Gaming', 'Work & Dev'],
+              : ['Bookmarks Bar', 'Gaming', 'Custom'],
+          quickLinks,
           downloads: Array.isArray(parsed.downloads) ? parsed.downloads.slice(0, 200) : [],
           profiles,
           activeProfileId,
@@ -167,10 +222,12 @@ export class SettingsStorage {
     }
 
     const fresh: PersistentDatabase = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       settings: { ...DEFAULT_SETTINGS },
       history: [],
       bookmarks: [...DEFAULT_BOOKMARKS],
-      bookmarkFolders: ['Bookmarks Bar', 'Gaming', 'Work & Dev'],
+      bookmarkFolders: ['Bookmarks Bar', 'Gaming', 'Custom'],
+      quickLinks: [...DEFAULT_QUICK_LINKS],
       downloads: [],
       profiles: [DEFAULT_PROFILE],
       activeProfileId: DEFAULT_PROFILE.id,
@@ -278,29 +335,30 @@ export class SettingsStorage {
     favicon?: string
     folder?: string
   }): BookmarkItem {
+    const normalizedUrl = normalizeWebUrl(data.url)
     const folder =
       data.folder && this.db.bookmarkFolders.includes(data.folder)
         ? data.folder
         : 'Bookmarks Bar'
 
-    const existing = this.db.bookmarks.find((b) => b.url === data.url)
+    const existing = this.db.bookmarks.find((b) => b.url === normalizedUrl)
     if (existing) {
-      existing.title = data.title || existing.title
+      existing.title = data.title.trim() || existing.title
       existing.folder = folder
-      if (data.favicon) existing.favicon = data.favicon
+      existing.favicon = data.favicon || existing.favicon || buildFaviconUrl(normalizedUrl, 32)
       this.saveToDisk()
       return existing
     }
 
     const item: BookmarkItem = {
       id: randomUUID(),
-      title: data.title || data.url,
-      url: data.url,
-      favicon: data.favicon || '',
+      title: data.title.trim() || normalizedUrl,
+      url: normalizedUrl,
+      favicon: data.favicon || buildFaviconUrl(normalizedUrl, 32),
       folder,
       createdAt: Date.now()
     }
-    this.db.bookmarks.unshift(item)
+    this.db.bookmarks.push(item)
     this.saveToDisk()
     return item
   }
@@ -317,6 +375,30 @@ export class SettingsStorage {
       this.saveToDisk()
     }
     return this.getBookmarkFolders()
+  }
+
+  // Quick Links (New Tab Speed Dial)
+  public getQuickLinks(): QuickLinkItem[] {
+    return [...this.db.quickLinks]
+  }
+
+  public addQuickLink(data: { title: string; url: string }): QuickLinkItem {
+    const normalizedUrl = normalizeWebUrl(data.url)
+    const cleanTitle = data.title.trim() || normalizedUrl.replace(/^https?:\/\/(www\.)?/i, '')
+    const item: QuickLinkItem = {
+      id: `ql-${randomUUID().slice(0, 8)}`,
+      title: cleanTitle,
+      url: normalizedUrl,
+      iconUrl: buildFaviconUrl(normalizedUrl, 64)
+    }
+    this.db.quickLinks.push(item)
+    this.saveToDisk()
+    return item
+  }
+
+  public removeQuickLink(id: string): void {
+    this.db.quickLinks = this.db.quickLinks.filter((q) => q.id !== id)
+    this.saveToDisk()
   }
 
   public getDownloads(): DownloadEntry[] {

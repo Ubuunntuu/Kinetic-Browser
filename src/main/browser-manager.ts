@@ -7,6 +7,7 @@ import {
   BrowserStatePayload,
   DownloadEntry,
   KINETIC_NEWTAB_URL,
+  QuickLinkItem,
   SavedSessionTab,
   SEARCH_ENGINES,
   TabState,
@@ -59,7 +60,6 @@ export class BrowserManager {
     if (settings.restorePreviousSession && saved && saved.tabs.length > 0) {
       const createdIds: string[] = []
       for (const savedTab of saved.tabs) {
-        // Migrate old default DuckDuckGo start tab to Kinetic New Tab Studio
         const urlToLoad =
           savedTab.url === 'https://duckduckgo.com/' || savedTab.url === 'https://duckduckgo.com'
             ? KINETIC_NEWTAB_URL
@@ -194,7 +194,7 @@ export class BrowserManager {
     const cleanUA = defaultUA
       .replace(/\sElectron\/[\d.]+/, '')
       .replace(/\skinetic-browser\/[\d.]+/i, '')
-    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.3.1`)
+    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.3.2`)
 
     const initialState: TabState = {
       id: tabId,
@@ -571,6 +571,17 @@ export class BrowserManager {
     return folders
   }
 
+  public addQuickLink(data: { title: string; url: string }): QuickLinkItem {
+    const item = this.storage.addQuickLink(data)
+    this.broadcastState()
+    return item
+  }
+
+  public removeQuickLink(id: string): void {
+    this.storage.removeQuickLink(id)
+    this.broadcastState()
+  }
+
   public pauseDownload(id: string): void {
     const item = this.activeDownloads.get(id)
     if (item && !item.isPaused()) {
@@ -678,8 +689,6 @@ export class BrowserManager {
     const active = this.getActiveTab()
     if (!active) return
 
-    // If the active tab is displaying the internal Kinetic New Tab Studio,
-    // hide its native WebContentsView so the React New Tab Studio renders cleanly
     if (active.state.url === KINETIC_NEWTAB_URL) {
       active.view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
       return
@@ -735,6 +744,7 @@ export class BrowserManager {
       history: this.storage.getHistory(),
       bookmarks: this.storage.getBookmarks(),
       bookmarkFolders: this.storage.getBookmarkFolders(),
+      quickLinks: this.storage.getQuickLinks(),
       downloads: this.storage.getDownloads(),
       profiles: this.storage.getProfiles(),
       activeProfileId: this.storage.getActiveProfileId()

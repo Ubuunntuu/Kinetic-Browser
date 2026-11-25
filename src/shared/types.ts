@@ -81,6 +81,13 @@ export interface BookmarkItem {
   createdAt: number
 }
 
+export interface QuickLinkItem {
+  id: string
+  title: string
+  url: string
+  iconUrl: string
+}
+
 export type DownloadStatus = 'progressing' | 'completed' | 'cancelled' | 'interrupted' | 'paused'
 
 export interface DownloadEntry {
@@ -139,6 +146,7 @@ export interface BrowserStatePayload {
   history: HistoryEntry[]
   bookmarks: BookmarkItem[]
   bookmarkFolders: string[]
+  quickLinks: QuickLinkItem[]
   downloads: DownloadEntry[]
   profiles: UserProfile[]
   activeProfileId: string
@@ -166,6 +174,9 @@ export interface KineticAPI {
   addBookmark: (data: { title: string; url: string; favicon?: string; folder?: string }) => Promise<BookmarkItem>
   removeBookmark: (id: string) => Promise<void>
   createBookmarkFolder: (folderName: string) => Promise<string[]>
+
+  addQuickLink: (data: { title: string; url: string }) => Promise<QuickLinkItem>
+  removeQuickLink: (id: string) => Promise<void>
 
   pauseDownload: (id: string) => Promise<void>
   resumeDownload: (id: string) => Promise<void>
