@@ -2,7 +2,15 @@ import { app, BaseWindow, ipcMain, WebContentsView } from 'electron'
 import { join } from 'path'
 import { BrowserManager } from './browser-manager'
 import { SettingsStorage } from './storage'
-import { BrowserSettings, CustomizationProfile, TabCustomStyle } from '../shared/types'
+import {
+  BrowserSettings,
+  CustomizationProfile,
+  PermissionPolicy,
+  PermissionType,
+  PrivacyConfig,
+  SecurityConfig,
+  TabCustomStyle
+} from '../shared/types'
 
 let mainWindow: BaseWindow | null = null
 let browserManager: BrowserManager | null = null
@@ -211,6 +219,56 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('kinetic:reset-customization', () => {
     return browserManager?.resetCustomization()
+  })
+
+  // Phase 5: Privacy & Security Engine
+  ipcMain.handle('kinetic:update-privacy-config', (_e, partial: Partial<PrivacyConfig>) => {
+    return browserManager?.updatePrivacyConfig(partial)
+  })
+
+  ipcMain.handle('kinetic:toggle-domain-whitelist', (_e, domain: string) => {
+    return browserManager?.toggleDomainWhitelist(domain)
+  })
+
+  ipcMain.handle('kinetic:add-custom-block-rule', (_e, rule: string) => {
+    return browserManager?.addCustomBlockRule(rule)
+  })
+
+  ipcMain.handle('kinetic:remove-custom-block-rule', (_e, rule: string) => {
+    return browserManager?.removeCustomBlockRule(rule)
+  })
+
+  ipcMain.handle('kinetic:toggle-restore-scrubbed', () => {
+    return browserManager?.toggleRestoreScrubbedElements()
+  })
+
+  ipcMain.handle('kinetic:clear-blocked-logs', () => {
+    browserManager?.clearBlockedLogs()
+  })
+
+  ipcMain.handle(
+    'kinetic:clear-browsing-data',
+    (
+      _e,
+      options: { cookies: boolean; cache: boolean; history: boolean; downloads: boolean }
+    ) => {
+      return browserManager?.clearBrowsingData(options)
+    }
+  )
+
+  ipcMain.handle('kinetic:update-security-config', (_e, partial: Partial<SecurityConfig>) => {
+    return browserManager?.updateSecurityConfig(partial)
+  })
+
+  ipcMain.handle(
+    'kinetic:set-site-permission',
+    (_e, origin: string, permission: PermissionType, policy: PermissionPolicy) => {
+      return browserManager?.setSitePermission(origin, permission, policy)
+    }
+  )
+
+  ipcMain.handle('kinetic:remove-site-permission', (_e, id: string) => {
+    return browserManager?.removeSitePermission(id)
   })
 
   // Layout & Settings

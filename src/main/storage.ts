@@ -7,14 +7,22 @@ import {
   BrowserSettings,
   BUILTIN_THEME_PRESETS,
   CustomizationProfile,
+  DEFAULT_PRIVACY_CONFIG,
+  DEFAULT_PRIVACY_STATS,
+  DEFAULT_SECURITY_CONFIG,
   DEFAULT_SETTINGS,
   DownloadEntry,
   HistoryEntry,
   KINETIC_DARK_PRESET,
   KINETIC_NEWTAB_URL,
+  PermissionPolicy,
+  PermissionType,
+  PrivacyConfig,
+  PrivacyStats,
   QuickLinkItem,
   SavedSessionTab,
   SEARCH_ENGINES,
+  SecurityConfig,
   UserProfile
 } from '../shared/types'
 
@@ -23,6 +31,9 @@ interface PersistentDatabase {
   settings: BrowserSettings
   customization: CustomizationProfile
   customThemes: CustomizationProfile[]
+  privacyConfig: PrivacyConfig
+  privacyStats: PrivacyStats
+  securityConfig: SecurityConfig
   history: HistoryEntry[]
   bookmarks: BookmarkItem[]
   bookmarkFolders: string[]
@@ -33,7 +44,7 @@ interface PersistentDatabase {
   sessionsByProfile: Record<string, { tabs: SavedSessionTab[]; activeIndex: number }>
 }
 
-const CURRENT_SCHEMA_VERSION = 3
+const CURRENT_SCHEMA_VERSION = 4
 
 const DEFAULT_PROFILE: UserProfile = {
   id: 'default',
@@ -227,6 +238,31 @@ export class SettingsStorage {
           customThemes: Array.isArray(parsed.customThemes)
             ? parsed.customThemes.map((t) => this.mergeCustomization(t))
             : [],
+          privacyConfig: {
+            ...DEFAULT_PRIVACY_CONFIG,
+            ...(parsed.privacyConfig || {}),
+            whitelistedDomains: Array.isArray(parsed.privacyConfig?.whitelistedDomains)
+              ? parsed.privacyConfig!.whitelistedDomains
+              : [],
+            customBlockRules: Array.isArray(parsed.privacyConfig?.customBlockRules)
+              ? parsed.privacyConfig!.customBlockRules
+              : []
+          },
+          privacyStats: {
+            ...DEFAULT_PRIVACY_STATS,
+            ...(parsed.privacyStats || {})
+          },
+          securityConfig: {
+            ...DEFAULT_SECURITY_CONFIG,
+            ...(parsed.securityConfig || {}),
+            defaultPermissions: {
+              ...DEFAULT_SECURITY_CONFIG.defaultPermissions,
+              ...(parsed.securityConfig?.defaultPermissions || {})
+            },
+            sitePermissions: Array.isArray(parsed.securityConfig?.sitePermissions)
+              ? parsed.securityConfig!.sitePermissions
+              : []
+          },
           history: Array.isArray(parsed.history) ? parsed.history.slice(0, 1500) : [],
           bookmarks,
           bookmarkFolders:
@@ -254,6 +290,9 @@ export class SettingsStorage {
       settings: { ...DEFAULT_SETTINGS },
       customization: JSON.parse(JSON.stringify(KINETIC_DARK_PRESET)),
       customThemes: [],
+      privacyConfig: { ...DEFAULT_PRIVACY_CONFIG },
+      privacyStats: { ...DEFAULT_PRIVACY_STATS },
+      securityConfig: JSON.parse(JSON.stringify(DEFAULT_SECURITY_CONFIG)),
       history: [],
       bookmarks: [...DEFAULT_BOOKMARKS],
       bookmarkFolders: ['Bookmarks Bar', 'Gaming', 'Custom'],
@@ -346,7 +385,6 @@ export class SettingsStorage {
     const all = this.getAllThemes()
     const found = all.find((t) => t.id === presetId)
     if (found) {
-      // Preserve current user sound preferences & custom CSS unless preset overrides
       const currentSounds = this.db.customization.sounds
       this.db.customization = this.mergeCustomization({
         ...JSON.parse(JSON.stringify(found)),
@@ -403,6 +441,123 @@ export class SettingsStorage {
     return this.getCustomization()
   }
 
+  // Phase 5 Privacy & Security Methods
+  public getPrivacyConfig(): PrivacyConfig {
+    return JSON.parse(JSON.stringify(this.db.privacyConfig))
+  }
+
+  public updatePrivacyConfig(partial: Partial<PrivacyConfig>): PrivacyConfig {
+    this.db.privacyConfig = {
+      ...this.db.privacyConfig,
+      ...partial
+    }
+    this.saveToDisk()
+    return this.getPrivacyConfig()
+  }
+
+  public toggleDomainWhitelist(domain: string): PrivacyConfig {
+    const clean = domain.toLowerCase().trim().replace(/^www\./, '')
+    if (!clean) return this.getPrivacyConfig()
+    const list = new Set(this.db.privacyConfig.whitelistedDomains)
+    if (list.has(clean)) {
+      list.delete(clean)
+    } else {
+      list.add(clean)
+    }
+    this.db.privacyConfig.whitelistedDomains = Array.from(list)
+    this.saveToDisk()
+    return this.getPrivacyConfig()
+  }
+
+  public addCustomBlockRule(rule: string): PrivacyConfig {
+    const clean = rule.trim()
+    if (clean && !this.db.privacyConfig.customBlockRules.includes(clean)) {
+      this.db.privacyConfig.customBlockRules.unshift(clean)
+      this.saveToDisk()
+    }
+    return this.getPrivacyConfig()
+  }
+
+  public removeCustomBlockRule(rule: string): PrivacyConfig {
+    this.db.privacyConfig.customBlockRules = this.db.privacyConfig.customBlockRules.filter(
+      (r) => r !== rule
+    )
+    this.saveToDisk()
+    return this.getPrivacyConfig()
+  }
+
+  public getPrivacyStats(): PrivacyStats {
+    return { ...this.db.privacyStats }
+  }
+
+  public incrementPrivacyStat(
+    type: 'ad' | 'tracker' | 'param' | 'scrub',
+    count: number = 1
+  ): void {
+    if (type === 'ad') {
+      this.db.privacyStats.adsBlocked += count
+      this.db.privacyStats.estimatedBytesSaved += count * 48000
+    } else if (type === 'tracker') {
+      this.db.privacyStats.trackersBlocked += count
+      this.db.privacyStats.estimatedBytesSaved += count * 14000
+    } else if (type === 'param') {
+      this.db.privacyStats.paramsStripped += count
+    } else if (type === 'scrub') {
+      this.db.privacyStats.elementsScrubbed += count
+    }
+  }
+
+  public getSecurityConfig(): SecurityConfig {
+    return JSON.parse(JSON.stringify(this.db.securityConfig))
+  }
+
+  public updateSecurityConfig(partial: Partial<SecurityConfig>): SecurityConfig {
+    this.db.securityConfig = {
+      ...this.db.securityConfig,
+      ...partial,
+      defaultPermissions: {
+        ...this.db.securityConfig.defaultPermissions,
+        ...(partial.defaultPermissions || {})
+      }
+    }
+    this.saveToDisk()
+    return this.getSecurityConfig()
+  }
+
+  public setSitePermission(
+    origin: string,
+    permission: PermissionType,
+    policy: PermissionPolicy
+  ): SecurityConfig {
+    const cleanOrigin = origin.trim().toLowerCase()
+    const existing = this.db.securityConfig.sitePermissions.find(
+      (s) => s.origin === cleanOrigin && s.permission === permission
+    )
+    if (existing) {
+      existing.policy = policy
+      existing.updatedAt = Date.now()
+    } else {
+      this.db.securityConfig.sitePermissions.unshift({
+        id: randomUUID(),
+        origin: cleanOrigin,
+        permission,
+        policy,
+        updatedAt: Date.now()
+      })
+    }
+    this.saveToDisk()
+    return this.getSecurityConfig()
+  }
+
+  public removeSitePermission(id: string): SecurityConfig {
+    this.db.securityConfig.sitePermissions = this.db.securityConfig.sitePermissions.filter(
+      (s) => s.id !== id
+    )
+    this.saveToDisk()
+    return this.getSecurityConfig()
+  }
+
+  // History, Bookmarks, QuickLinks, Downloads, Profiles
   public getHistory(profileId?: string): HistoryEntry[] {
     const pid = profileId || this.db.activeProfileId
     return this.db.history.filter((h) => h.profileId === pid)

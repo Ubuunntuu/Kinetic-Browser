@@ -2,6 +2,8 @@ export type SearchEngineId = 'duckduckgo' | 'google' | 'brave' | 'bing' | 'start
 
 export type DrawerPanelId =
   | 'none'
+  | 'shield'
+  | 'security'
   | 'customize'
   | 'bookmarks'
   | 'history'
@@ -73,6 +75,9 @@ export interface TabState {
   isPrivate: boolean
   profileId: string
   customStyle?: TabCustomStyle
+  blockedCount: number
+  scrubbedElementsCount: number
+  isScrubberRestored: boolean
 }
 
 export interface HistoryEntry {
@@ -468,6 +473,104 @@ export const BUILTIN_THEME_PRESETS: CustomizationProfile[] = [
   })
 ]
 
+// ============================================================================
+// PHASE 5: PRIVACY & SECURITY ENGINE SCHEMA
+// ============================================================================
+
+export type DohProviderId = 'system' | 'cloudflare' | 'quad9' | 'mullvad'
+export type PermissionType =
+  | 'media'
+  | 'geolocation'
+  | 'notifications'
+  | 'clipboard-read'
+  | 'midi'
+export type PermissionPolicy = 'allow' | 'block'
+
+export interface BlockedRequestLog {
+  id: string
+  url: string
+  domain: string
+  category: 'ad' | 'tracker' | 'custom' | 'param-strip'
+  ruleMatched: string
+  timestamp: number
+}
+
+export interface PrivacyConfig {
+  adBlockEnabled: boolean
+  trackerBlockEnabled: boolean
+  stripTrackingParams: boolean
+  domScrubberEnabled: boolean
+  scrubCookieBanners: boolean
+  scrubSponsoredCards: boolean
+  blockThirdPartyCookies: boolean
+  httpsUpgrade: boolean
+  sendDoNotTrack: boolean
+  fingerprintProtection: boolean
+  dohProvider: DohProviderId
+  whitelistedDomains: string[]
+  customBlockRules: string[]
+}
+
+export interface PrivacyStats {
+  adsBlocked: number
+  trackersBlocked: number
+  paramsStripped: number
+  elementsScrubbed: number
+  estimatedBytesSaved: number
+}
+
+export interface SitePermissionRule {
+  id: string
+  origin: string
+  permission: PermissionType
+  policy: PermissionPolicy
+  updatedAt: number
+}
+
+export interface SecurityConfig {
+  defaultPermissions: Record<PermissionType, PermissionPolicy>
+  sitePermissions: SitePermissionRule[]
+  strictCertEnforcement: boolean
+  blockDangerousDownloads: boolean
+}
+
+export const DEFAULT_PRIVACY_CONFIG: PrivacyConfig = {
+  adBlockEnabled: true,
+  trackerBlockEnabled: true,
+  stripTrackingParams: true,
+  domScrubberEnabled: true,
+  scrubCookieBanners: true,
+  scrubSponsoredCards: true,
+  blockThirdPartyCookies: true,
+  httpsUpgrade: true,
+  sendDoNotTrack: true,
+  fingerprintProtection: true,
+  dohProvider: 'cloudflare',
+  whitelistedDomains: [],
+  customBlockRules: []
+}
+
+export const DEFAULT_PRIVACY_STATS: PrivacyStats = {
+  adsBlocked: 0,
+  trackersBlocked: 0,
+  paramsStripped: 0,
+  elementsScrubbed: 0,
+  estimatedBytesSaved: 0
+}
+
+export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
+  defaultPermissions: {
+    media: 'block',
+    geolocation: 'block',
+    notifications: 'block',
+    'clipboard-read': 'allow',
+    midi: 'block'
+  },
+  sitePermissions: [],
+  strictCertEnforcement: true,
+  blockDangerousDownloads: true
+}
+
 export interface BrowserSettings {
   searchEngine: SearchEngineId
   homepageUrl: string
@@ -499,6 +602,10 @@ export interface BrowserStatePayload {
   settings: BrowserSettings
   customization: CustomizationProfile
   savedThemes: CustomizationProfile[]
+  privacyConfig: PrivacyConfig
+  privacyStats: PrivacyStats
+  blockedLogs: BlockedRequestLog[]
+  securityConfig: SecurityConfig
   history: HistoryEntry[]
   bookmarks: BookmarkItem[]
   bookmarkFolders: string[]
@@ -557,6 +664,28 @@ export interface KineticAPI {
   deleteCustomTheme: (themeId: string) => Promise<void>
   importCustomizationJson: (jsonString: string) => Promise<CustomizationProfile>
   resetCustomization: () => Promise<CustomizationProfile>
+
+  // Phase 5: Privacy & Security Engine API
+  updatePrivacyConfig: (partial: Partial<PrivacyConfig>) => Promise<PrivacyConfig>
+  toggleDomainWhitelist: (domain: string) => Promise<PrivacyConfig>
+  addCustomBlockRule: (rule: string) => Promise<PrivacyConfig>
+  removeCustomBlockRule: (rule: string) => Promise<PrivacyConfig>
+  toggleRestoreScrubbedElements: () => Promise<void>
+  clearBlockedLogs: () => Promise<void>
+  clearBrowsingData: (options: {
+    cookies: boolean
+    cache: boolean
+    history: boolean
+    downloads: boolean
+  }) => Promise<void>
+
+  updateSecurityConfig: (partial: Partial<SecurityConfig>) => Promise<SecurityConfig>
+  setSitePermission: (
+    origin: string,
+    permission: PermissionType,
+    policy: PermissionPolicy
+  ) => Promise<SecurityConfig>
+  removeSitePermission: (id: string) => Promise<SecurityConfig>
 
   setRightDrawerOpen: (isOpen: boolean, width?: number) => Promise<void>
 

@@ -6,8 +6,10 @@ import {
   X,
   Plus,
   Home,
+  Shield,
   ShieldCheck,
   ShieldAlert,
+  Lock,
   Settings,
   Terminal,
   Copy,
@@ -33,20 +35,30 @@ import {
   RotateCcw
 } from 'lucide-react'
 import {
+  BlockedRequestLog,
   BookmarkItem,
   BrowserSettings,
   BrowserStatePayload,
   BUILTIN_THEME_PRESETS,
   CustomizationProfile,
+  DEFAULT_PRIVACY_CONFIG,
+  DEFAULT_PRIVACY_STATS,
+  DEFAULT_SECURITY_CONFIG,
   DEFAULT_SETTINGS,
+  DohProviderId,
   DownloadEntry,
   DrawerPanelId,
   HistoryEntry,
   KINETIC_DARK_PRESET,
   KINETIC_NEWTAB_URL,
+  PermissionPolicy,
+  PermissionType,
+  PrivacyConfig,
+  PrivacyStats,
   QuickLinkItem,
   SEARCH_ENGINES,
   SearchEngineId,
+  SecurityConfig,
   SoundEventId,
   SoundPackId,
   TabState,
@@ -62,6 +74,8 @@ type CustomizeTabId =
   | 'searchbar'
   | 'sounds'
   | 'css'
+
+type ShieldSubTabId = 'overview' | 'scrubber' | 'rules' | 'logs'
 
 const FONT_OPTIONS = [
   { label: 'Segoe UI (Modern Default)', value: "'Segoe UI', system-ui, sans-serif" },
@@ -80,10 +94,26 @@ const SOUND_EVENT_LABELS: Record<SoundEventId, string> = {
   download: 'Download Triggered'
 }
 
+const PERMISSION_LABELS: Record<PermissionType, string> = {
+  media: 'Camera & Microphone',
+  geolocation: 'Location Access',
+  notifications: 'Desktop Notifications',
+  'clipboard-read': 'Clipboard Read Access',
+  midi: 'MIDI / Hardware Devices'
+}
+
 function getSiteFaviconUrl(siteUrl: string, size: number = 64): string {
   try {
     const parsed = new URL(siteUrl.startsWith('http') ? siteUrl : `https://${siteUrl}`)
     return `https://www.google.com/s2/favicons?domain=${parsed.hostname}&sz=${size}`
+  } catch {
+    return ''
+  }
+}
+
+function getHostnameFromUrl(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, '')
   } catch {
     return ''
   }
@@ -104,6 +134,20 @@ export default function App(): JSX.Element {
   const [custom, setCustom] = useState<CustomizationProfile>(KINETIC_DARK_PRESET)
   const [savedThemes, setSavedThemes] = useState<CustomizationProfile[]>(BUILTIN_THEME_PRESETS)
 
+  // Phase 5 Privacy & Security State
+  const [privacyConfig, setPrivacyConfig] = useState<PrivacyConfig>(DEFAULT_PRIVACY_CONFIG)
+  const [privacyStats, setPrivacyStats] = useState<PrivacyStats>(DEFAULT_PRIVACY_STATS)
+  const [blockedLogs, setBlockedLogs] = useState<BlockedRequestLog[]>([])
+  const [securityConfig, setSecurityConfig] = useState<SecurityConfig>(DEFAULT_SECURITY_CONFIG)
+  const [shieldSubTab, setShieldSubTab] = useState<ShieldSubTabId>('overview')
+  const [newBlockRuleInput, setNewBlockRuleInput] = useState<string>('')
+  const [newPermOriginInput, setNewPermOriginInput] = useState<string>('')
+  const [newPermTypeInput, setNewPermTypeInput] = useState<PermissionType>('media')
+  const [newPermPolicyInput, setNewPermPolicyInput] = useState<PermissionPolicy>('block')
+  const [clearCookiesCheck, setClearCookiesCheck] = useState<boolean>(true)
+  const [clearCacheCheck, setClearCacheCheck] = useState<boolean>(true)
+  const [clearHistoryCheck, setClearHistoryCheck] = useState<boolean>(false)
+
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([])
   const [bookmarkFolders, setBookmarkFolders] = useState<string[]>(['Bookmarks Bar'])
@@ -119,18 +163,15 @@ export default function App(): JSX.Element {
   const [customizeSubTab, setCustomizeSubTab] = useState<CustomizeTabId>('themes')
   const [clockNow, setClockNow] = useState<Date>(new Date())
 
-  // Customization Studio local buffers
   const [customThemeNameInput, setCustomThemeNameInput] = useState<string>('')
   const [importJsonInput, setImportJsonInput] = useState<string>('')
   const [cssDraft, setCssDraft] = useState<string>('')
   const [cssError, setCssError] = useState<string>('')
 
-  // Per-Tab Individual Override Form
   const [tabCustomTitleDraft, setTabCustomTitleDraft] = useState<string>('')
   const [tabCustomColorDraft, setTabCustomColorDraft] = useState<string>('#00f0ff')
   const [tabCustomBgDraft, setTabCustomBgDraft] = useState<string>('#202436')
 
-  // Quick Link & Bookmark Forms
   const [isAddingQuickLink, setIsAddingQuickLink] = useState<boolean>(false)
   const [customQuickTitle, setCustomQuickTitle] = useState<string>('')
   const [customQuickUrl, setCustomQuickUrl] = useState<string>('')
@@ -148,6 +189,9 @@ export default function App(): JSX.Element {
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || null
   const isNewTabActive = !activeTab || activeTab.url === KINETIC_NEWTAB_URL
+  const activeHostname = activeTab && !isNewTabActive ? getHostnameFromUrl(activeTab.url) : ''
+  const isCurrentSiteWhitelisted =
+    Boolean(activeHostname) && privacyConfig.whitelistedDomains.includes(activeHostname)
   const currentEngine = SEARCH_ENGINES[settings.searchEngine] || SEARCH_ENGINES.google
   const currentBookmark =
     activeTab && !isNewTabActive ? bookmarks.find((b) => b.url === activeTab.url) : undefined
@@ -158,7 +202,6 @@ export default function App(): JSX.Element {
     return () => clearInterval(timer)
   }, [])
 
-  // Apply 40+ CSS Custom Properties & Live Custom CSS Sheet whenever CustomizationProfile updates
   useEffect(() => {
     const root = document.documentElement
     const { appearance, taskbar, tabs: tabCfg, searchBar } = custom
@@ -200,7 +243,6 @@ export default function App(): JSX.Element {
     root.style.setProperty('--kb-search-border-width', `${searchBar.borderWidth}px`)
     root.style.setProperty('--kb-search-padding', `${searchBar.paddingHorizontal}px`)
 
-    // Inject User Custom CSS safely
     let styleTag = document.getElementById('kinetic-user-custom-css') as HTMLStyleElement | null
     if (!styleTag) {
       styleTag = document.createElement('style')
@@ -222,6 +264,18 @@ export default function App(): JSX.Element {
       }
       if (payload.savedThemes) {
         setSavedThemes(payload.savedThemes)
+      }
+      if (payload.privacyConfig) {
+        setPrivacyConfig(payload.privacyConfig)
+      }
+      if (payload.privacyStats) {
+        setPrivacyStats(payload.privacyStats)
+      }
+      if (payload.blockedLogs) {
+        setBlockedLogs(payload.blockedLogs)
+      }
+      if (payload.securityConfig) {
+        setSecurityConfig(payload.securityConfig)
       }
       setHistory(payload.history || [])
       setBookmarks(payload.bookmarks || [])
@@ -612,6 +666,20 @@ export default function App(): JSX.Element {
             spellCheck={false}
           />
 
+          {/* Live Per-Tab Ad/Tracker Block Badge inside Omnibox */}
+          {activeTab && !isNewTabActive && activeTab.blockedCount > 0 && (
+            <button
+              type="button"
+              className="kb-security-badge neutral"
+              style={{ border: 'none', cursor: 'pointer' }}
+              onClick={() => openDrawerPanel('shield')}
+              title={`${activeTab.blockedCount} Ads/Trackers blocked on this page (Click to inspect)`}
+            >
+              <Shield size={11} />
+              <span>{activeTab.blockedCount}</span>
+            </button>
+          )}
+
           {!isNewTabActive && (
             <button
               type="button"
@@ -654,12 +722,32 @@ export default function App(): JSX.Element {
           </button>
         )}
 
-        {/* Extreme Customization Studio Trigger */}
+        {/* Phase 5: Kinetic Privacy Shield Trigger */}
+        <button
+          type="button"
+          className={`kb-icon-btn ${activeDrawer === 'shield' ? 'active' : ''}`}
+          onClick={() => toggleDrawerPanel('shield')}
+          title={`Kinetic Privacy Shield (${privacyStats.adsBlocked + privacyStats.trackersBlocked} total blocked)`}
+        >
+          <Shield size={15} />
+        </button>
+
+        {/* Phase 5: Security & Permissions Dashboard Trigger */}
+        <button
+          type="button"
+          className={`kb-icon-btn ${activeDrawer === 'security' ? 'active' : ''}`}
+          onClick={() => toggleDrawerPanel('security')}
+          title="Security & Permissions Dashboard"
+        >
+          <Lock size={15} />
+        </button>
+
+        {/* Phase 4: Extreme Customization Studio Trigger */}
         <button
           type="button"
           className={`kb-icon-btn ${activeDrawer === 'customize' ? 'active' : ''}`}
           onClick={() => toggleDrawerPanel('customize')}
-          title="Extreme Customization Studio (Themes, Taskbar, Tabs, Sounds, CSS)"
+          title="Extreme Customization Studio"
         >
           <Palette size={15} />
         </button>
@@ -749,7 +837,6 @@ export default function App(): JSX.Element {
     >
       {/* TOP CHROME */}
       <header>
-        {/* Top Tab Strip (or Compact Window Drag Bar when Vertical Tabs are enabled) */}
         <div className="kb-tabstrip-row">
           {custom.tabs.orientation === 'horizontal' ? (
             <div className="kb-tabs-container">
@@ -765,7 +852,8 @@ export default function App(): JSX.Element {
             </div>
           ) : (
             <div style={{ fontSize: 11, color: 'var(--kb-text-secondary)', paddingLeft: 6 }}>
-              VERTICAL TABS MODE • {activeTab?.customStyle?.customTitle || activeTab?.title || 'Kinetic'}
+              VERTICAL TABS MODE •{' '}
+              {activeTab?.customStyle?.customTitle || activeTab?.title || 'Kinetic'}
             </div>
           )}
 
@@ -797,10 +885,8 @@ export default function App(): JSX.Element {
           </div>
         </div>
 
-        {/* Render Taskbar at Top if configured */}
         {custom.taskbar.position === 'top' && renderNavbarRow(false)}
 
-        {/* Bookmarks Bar */}
         {settings.showBookmarksBar && (
           <div className="kb-bookmarks-bar">
             {bookmarks.map((bm) => {
@@ -848,7 +934,6 @@ export default function App(): JSX.Element {
 
       {/* MAIN WORKSPACE */}
       <main className="kb-workspace">
-        {/* Left Vertical Tabs Sidebar when orientation === 'vertical' */}
         {custom.tabs.orientation === 'vertical' && (
           <aside className="kb-vertical-tabs-sidebar">
             {tabs.map((tab) => renderTabItem(tab))}
@@ -1008,7 +1093,13 @@ export default function App(): JSX.Element {
           <aside className="kb-settings-drawer">
             <div className="kb-drawer-header">
               <span className="kb-drawer-title">
-                {activeDrawer === 'customize' ? 'EXTREME CUSTOMIZATION ENGINE' : activeDrawer}
+                {activeDrawer === 'shield'
+                  ? 'KINETIC PRIVACY SHIELD'
+                  : activeDrawer === 'security'
+                    ? 'SECURITY & PERMISSIONS'
+                    : activeDrawer === 'customize'
+                      ? 'EXTREME CUSTOMIZATION ENGINE'
+                      : activeDrawer}
               </span>
               <button
                 type="button"
@@ -1019,6 +1110,540 @@ export default function App(): JSX.Element {
                 <X size={15} />
               </button>
             </div>
+
+            {/* =============================================================== */}
+            {/* PHASE 5: PRIVACY ENGINE & WEBSITE SCRUBBER DASHBOARD            */}
+            {/* =============================================================== */}
+            {activeDrawer === 'shield' && (
+              <>
+                <div className="kb-subtab-strip">
+                  {(
+                    [
+                      ['overview', 'Shield & Stats'],
+                      ['scrubber', 'DOM Scrubber'],
+                      ['rules', 'Filter Rules'],
+                      ['logs', `Live Log (${blockedLogs.length})`]
+                    ] as [ShieldSubTabId, string][]
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`kb-subtab-btn ${shieldSubTab === id ? 'active' : ''}`}
+                      onClick={() => setShieldSubTab(id)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {shieldSubTab === 'overview' && (
+                  <div className="kb-list-container">
+                    {/* Telemetry Counters Grid */}
+                    <div className="kb-theme-grid">
+                      <div className="kb-card-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+                        <span className="kb-setting-desc">Ads Blocked</span>
+                        <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--kb-accent)' }}>
+                          {privacyStats.adsBlocked}
+                        </span>
+                      </div>
+                      <div className="kb-card-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+                        <span className="kb-setting-desc">Trackers Blocked</span>
+                        <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--kb-secure)' }}>
+                          {privacyStats.trackersBlocked}
+                        </span>
+                      </div>
+                      <div className="kb-card-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+                        <span className="kb-setting-desc">URL Params Stripped</span>
+                        <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--kb-warning)' }}>
+                          {privacyStats.paramsStripped}
+                        </span>
+                      </div>
+                      <div className="kb-card-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+                        <span className="kb-setting-desc">Est. Data Saved</span>
+                        <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--kb-text-primary)' }}>
+                          {formatBytes(privacyStats.estimatedBytesSaved)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Per-Site Shield Whitelist Toggle */}
+                    {activeHostname && (
+                      <div
+                        className="kb-card-item"
+                        style={{
+                          borderColor: isCurrentSiteWhitelisted
+                            ? 'var(--kb-warning)'
+                            : 'var(--kb-secure)'
+                        }}
+                      >
+                        <div className="kb-card-main">
+                          <span className="kb-card-title">Site: {activeHostname}</span>
+                          <span className="kb-card-sub">
+                            {isCurrentSiteWhitelisted
+                              ? 'Shield Disabled (Whitelisted)'
+                              : `Shield Active • ${activeTab?.blockedCount || 0} blocked on this tab`}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className={`kb-btn ${isCurrentSiteWhitelisted ? 'primary' : 'danger'}`}
+                          style={{ flex: '0 0 auto' }}
+                          onClick={() => window.kinetic.toggleDomainWhitelist(activeHostname)}
+                        >
+                          {isCurrentSiteWhitelisted ? 'Enable Shield' : 'Whitelist Site'}
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="kb-checkbox-row">
+                      <div>
+                        <div className="kb-setting-label">Native Ad Blocker (EasyList Core)</div>
+                        <div className="kb-setting-desc">Block ad networks & video pre-roll domains</div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={privacyConfig.adBlockEnabled}
+                        onChange={(e) =>
+                          window.kinetic.updatePrivacyConfig({ adBlockEnabled: e.target.checked })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <div>
+                        <div className="kb-setting-label">Third-Party Tracker Blocker</div>
+                        <div className="kb-setting-desc">Block analytics, telemetry & behavioral pixels</div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={privacyConfig.trackerBlockEnabled}
+                        onChange={(e) =>
+                          window.kinetic.updatePrivacyConfig({
+                            trackerBlockEnabled: e.target.checked
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <div>
+                        <div className="kb-setting-label">Strip URL Tracking Parameters</div>
+                        <div className="kb-setting-desc">Remove utm_*, fbclid, gclid, msclkid on navigate</div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={privacyConfig.stripTrackingParams}
+                        onChange={(e) =>
+                          window.kinetic.updatePrivacyConfig({
+                            stripTrackingParams: e.target.checked
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <div>
+                        <div className="kb-setting-label">Automatic HTTPS Upgrade</div>
+                        <div className="kb-setting-desc">Upgrade unencrypted HTTP links to HTTPS</div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={privacyConfig.httpsUpgrade}
+                        onChange={(e) =>
+                          window.kinetic.updatePrivacyConfig({ httpsUpgrade: e.target.checked })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <div>
+                        <div className="kb-setting-label">Fingerprinting & GPC Defense</div>
+                        <div className="kb-setting-desc">Enforce Global Privacy Control (Sec-GPC: 1) & DNT</div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={privacyConfig.fingerprintProtection}
+                        onChange={(e) =>
+                          window.kinetic.updatePrivacyConfig({
+                            fingerprintProtection: e.target.checked,
+                            sendDoNotTrack: e.target.checked
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-setting-group">
+                      <label className="kb-setting-label">Encrypted DNS-over-HTTPS (DoH)</label>
+                      <select
+                        className="kb-select"
+                        value={privacyConfig.dohProvider}
+                        onChange={(e) =>
+                          window.kinetic.updatePrivacyConfig({
+                            dohProvider: e.target.value as DohProviderId
+                          })
+                        }
+                      >
+                        <option value="cloudflare">Cloudflare (1.1.1.1 Encrypted DoH)</option>
+                        <option value="quad9">Quad9 (9.9.9.9 Malware-Blocking DoH)</option>
+                        <option value="mullvad">Mullvad Privacy DoH</option>
+                        <option value="system">System Default DNS</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {shieldSubTab === 'scrubber' && (
+                  <div className="kb-list-container">
+                    <span className="kb-setting-desc">
+                      Non-destructively hides residual page ad containers, sponsored widgets, and
+                      cookie walls. You can restore hidden elements at any time with 1 click.
+                    </span>
+
+                    <div className="kb-card-item">
+                      <div className="kb-card-main">
+                        <span className="kb-card-title">
+                          Scrubbed on Active Tab: {activeTab?.scrubbedElementsCount || 0} elements
+                        </span>
+                        <span className="kb-card-sub">
+                          Total Scrubbed Session-Wide: {privacyStats.elementsScrubbed}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="kb-btn primary"
+                        style={{ flex: '0 0 auto' }}
+                        onClick={() => window.kinetic.toggleRestoreScrubbedElements()}
+                      >
+                        {activeTab?.isScrubberRestored ? 'Re-Apply Scrubber' : 'Restore Elements'}
+                      </button>
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <span className="kb-setting-label">Enable Cosmetic DOM Scrubber</span>
+                      <input
+                        type="checkbox"
+                        checked={privacyConfig.domScrubberEnabled}
+                        onChange={(e) =>
+                          window.kinetic.updatePrivacyConfig({
+                            domScrubberEnabled: e.target.checked
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <span className="kb-setting-label">Scrub Sponsored Content Cards</span>
+                      <input
+                        type="checkbox"
+                        checked={privacyConfig.scrubSponsoredCards}
+                        onChange={(e) =>
+                          window.kinetic.updatePrivacyConfig({
+                            scrubSponsoredCards: e.target.checked
+                          })
+                        }
+                      />
+                    </div>
+
+                    <div className="kb-checkbox-row">
+                      <span className="kb-setting-label">Scrub Intrusive Cookie Banners</span>
+                      <input
+                        type="checkbox"
+                        checked={privacyConfig.scrubCookieBanners}
+                        onChange={(e) =>
+                          window.kinetic.updatePrivacyConfig({
+                            scrubCookieBanners: e.target.checked
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {shieldSubTab === 'rules' && (
+                  <div className="kb-list-container">
+                    <form
+                      className="kb-setting-group"
+                      onSubmit={async (e) => {
+                        e.preventDefault()
+                        if (!newBlockRuleInput.trim()) return
+                        await window.kinetic.addCustomBlockRule(newBlockRuleInput.trim())
+                        setNewBlockRuleInput('')
+                      }}
+                    >
+                      <label className="kb-setting-label">Add Custom Filter Rule</label>
+                      <span className="kb-setting-desc">
+                        Supports EasyList domain syntax (e.g. <code>||ads.example.com^</code>) or URL
+                        substrings.
+                      </span>
+                      <div className="kb-btn-row">
+                        <input
+                          type="text"
+                          className="kb-input"
+                          style={{ flex: 1 }}
+                          placeholder="||ads.example.com^"
+                          value={newBlockRuleInput}
+                          onChange={(e) => setNewBlockRuleInput(e.target.value)}
+                        />
+                        <button type="submit" className="kb-btn primary" style={{ flex: '0 0 auto' }}>
+                          Add Rule
+                        </button>
+                      </div>
+                    </form>
+
+                    <label className="kb-setting-label" style={{ marginTop: 6 }}>
+                      Custom Filter Rules ({privacyConfig.customBlockRules.length})
+                    </label>
+                    {privacyConfig.customBlockRules.length === 0 ? (
+                      <div className="kb-empty-state">No custom block rules added yet.</div>
+                    ) : (
+                      privacyConfig.customBlockRules.map((rule) => (
+                        <div key={rule} className="kb-card-item">
+                          <span className="kb-card-title">{rule}</span>
+                          <button
+                            type="button"
+                            className="kb-tab-action-btn"
+                            onClick={() => window.kinetic.removeCustomBlockRule(rule)}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      ))
+                    )}
+
+                    <label className="kb-setting-label" style={{ marginTop: 8 }}>
+                      Whitelisted Websites ({privacyConfig.whitelistedDomains.length})
+                    </label>
+                    {privacyConfig.whitelistedDomains.map((dom) => (
+                      <div key={dom} className="kb-card-item">
+                        <span className="kb-card-title">{dom}</span>
+                        <button
+                          type="button"
+                          className="kb-tab-action-btn"
+                          onClick={() => window.kinetic.toggleDomainWhitelist(dom)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {shieldSubTab === 'logs' && (
+                  <div className="kb-list-container">
+                    <div className="kb-btn-row">
+                      <button
+                        type="button"
+                        className="kb-btn"
+                        onClick={() => window.kinetic.clearBlockedLogs()}
+                      >
+                        Clear Inspection Log
+                      </button>
+                    </div>
+                    {blockedLogs.length === 0 ? (
+                      <div className="kb-empty-state">
+                        No blocked requests logged yet. Browse a website to see live interceptions.
+                      </div>
+                    ) : (
+                      blockedLogs.map((log) => (
+                        <div key={log.id} className="kb-card-item">
+                          <div className="kb-card-main">
+                            <span className="kb-card-title">
+                              [{log.category.toUpperCase()}] {log.domain}
+                            </span>
+                            <span className="kb-card-sub">
+                              Rule: {log.ruleMatched} • {log.url}
+                            </span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* =============================================================== */}
+            {/* PHASE 5: SECURITY & PERMISSIONS DASHBOARD                       */}
+            {/* =============================================================== */}
+            {activeDrawer === 'security' && (
+              <div className="kb-list-container">
+                <span className="kb-setting-desc">
+                  All tabs execute in isolated Chromium sandboxes (`sandbox: true`,
+                  `contextIsolation: true`) with strict TLS validation.
+                </span>
+
+                <div className="kb-checkbox-row">
+                  <div>
+                    <div className="kb-setting-label">Block Dangerous Script Downloads</div>
+                    <div className="kb-setting-desc">Block automatic .bat, .cmd, .scr, .vbs downloads</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={securityConfig.blockDangerousDownloads}
+                    onChange={(e) =>
+                      window.kinetic.updateSecurityConfig({
+                        blockDangerousDownloads: e.target.checked
+                      })
+                    }
+                  />
+                </div>
+
+                <label className="kb-setting-label" style={{ marginTop: 6 }}>
+                  Default Hardware & Sensor Permissions
+                </label>
+                {(Object.keys(PERMISSION_LABELS) as PermissionType[]).map((perm) => (
+                  <div key={perm} className="kb-setting-row">
+                    <span className="kb-setting-desc">{PERMISSION_LABELS[perm]}</span>
+                    <select
+                      className="kb-select"
+                      style={{ width: 110 }}
+                      value={securityConfig.defaultPermissions[perm]}
+                      onChange={(e) =>
+                        window.kinetic.updateSecurityConfig({
+                          defaultPermissions: {
+                            ...securityConfig.defaultPermissions,
+                            [perm]: e.target.value as PermissionPolicy
+                          }
+                        })
+                      }
+                    >
+                      <option value="block">Block</option>
+                      <option value="allow">Allow</option>
+                    </select>
+                  </div>
+                ))}
+
+                <form
+                  className="kb-setting-group"
+                  style={{ marginTop: 8 }}
+                  onSubmit={async (e) => {
+                    e.preventDefault()
+                    if (!newPermOriginInput.trim()) return
+                    await window.kinetic.setSitePermission(
+                      newPermOriginInput.trim(),
+                      newPermTypeInput,
+                      newPermPolicyInput
+                    )
+                    setNewPermOriginInput('')
+                  }}
+                >
+                  <label className="kb-setting-label">Add Per-Site Permission Rule</label>
+                  <input
+                    type="text"
+                    className="kb-input"
+                    placeholder="Domain (e.g. discord.com)"
+                    value={newPermOriginInput}
+                    onChange={(e) => setNewPermOriginInput(e.target.value)}
+                  />
+                  <div className="kb-btn-row">
+                    <select
+                      className="kb-select"
+                      style={{ flex: 1 }}
+                      value={newPermTypeInput}
+                      onChange={(e) => setNewPermTypeInput(e.target.value as PermissionType)}
+                    >
+                      {(Object.keys(PERMISSION_LABELS) as PermissionType[]).map((p) => (
+                        <option key={p} value={p}>
+                          {PERMISSION_LABELS[p]}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="kb-select"
+                      value={newPermPolicyInput}
+                      onChange={(e) => setNewPermPolicyInput(e.target.value as PermissionPolicy)}
+                    >
+                      <option value="allow">Allow</option>
+                      <option value="block">Block</option>
+                    </select>
+                    <button type="submit" className="kb-btn primary" style={{ flex: '0 0 auto' }}>
+                      Save
+                    </button>
+                  </div>
+                </form>
+
+                {securityConfig.sitePermissions.length > 0 && (
+                  <>
+                    <label className="kb-setting-label" style={{ marginTop: 6 }}>
+                      Site Permission Rules
+                    </label>
+                    {securityConfig.sitePermissions.map((rule) => (
+                      <div key={rule.id} className="kb-card-item">
+                        <div className="kb-card-main">
+                          <span className="kb-card-title">{rule.origin}</span>
+                          <span className="kb-card-sub">
+                            {PERMISSION_LABELS[rule.permission]} •{' '}
+                            <strong
+                              style={{
+                                color:
+                                  rule.policy === 'allow'
+                                    ? 'var(--kb-secure)'
+                                    : 'var(--kb-danger)'
+                              }}
+                            >
+                              {rule.policy.toUpperCase()}
+                            </strong>
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="kb-tab-action-btn"
+                          onClick={() => window.kinetic.removeSitePermission(rule.id)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {/* Granular Clear Browsing Data */}
+                <div
+                  className="kb-card-item"
+                  style={{ flexDirection: 'column', alignItems: 'stretch', marginTop: 10 }}
+                >
+                  <span className="kb-setting-label">Granular Data Scrubber</span>
+                  <div className="kb-checkbox-row">
+                    <span className="kb-setting-desc">Cookies & Site Storage</span>
+                    <input
+                      type="checkbox"
+                      checked={clearCookiesCheck}
+                      onChange={(e) => setClearCookiesCheck(e.target.checked)}
+                    />
+                  </div>
+                  <div className="kb-checkbox-row">
+                    <span className="kb-setting-desc">Cached Images & Files</span>
+                    <input
+                      type="checkbox"
+                      checked={clearCacheCheck}
+                      onChange={(e) => setClearCacheCheck(e.target.checked)}
+                    />
+                  </div>
+                  <div className="kb-checkbox-row">
+                    <span className="kb-setting-desc">Browsing History</span>
+                    <input
+                      type="checkbox"
+                      checked={clearHistoryCheck}
+                      onChange={(e) => setClearHistoryCheck(e.target.checked)}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="kb-btn danger"
+                    onClick={() =>
+                      window.kinetic.clearBrowsingData({
+                        cookies: clearCookiesCheck,
+                        cache: clearCacheCheck,
+                        history: clearHistoryCheck,
+                        downloads: false
+                      })
+                    }
+                  >
+                    Purge Selected Browsing Data
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* =============================================================== */}
             {/* PHASE 4: EXTREME CUSTOMIZATION STUDIO                           */}
@@ -1051,7 +1676,6 @@ export default function App(): JSX.Element {
                   ))}
                 </div>
 
-                {/* SUB-TAB 1: 10 PRESET THEMES & UNLIMITED PROFILES */}
                 {customizeSubTab === 'themes' && (
                   <div className="kb-list-container">
                     <span className="kb-setting-desc">
@@ -1088,22 +1712,18 @@ export default function App(): JSX.Element {
                             <span
                               className="kb-theme-dot"
                               style={{ background: theme.appearance.bgPrimary }}
-                              title="Primary Background"
                             />
                             <span
                               className="kb-theme-dot"
                               style={{ background: theme.appearance.bgElevated }}
-                              title="Surface"
                             />
                             <span
                               className="kb-theme-dot"
                               style={{ background: theme.appearance.accentPrimary }}
-                              title="Primary Accent"
                             />
                             <span
                               className="kb-theme-dot"
                               style={{ background: theme.appearance.accentSecondary }}
-                              title="Secondary Accent"
                             />
                           </div>
                         </div>
@@ -1177,7 +1797,6 @@ export default function App(): JSX.Element {
                   </div>
                 )}
 
-                {/* SUB-TAB 2: APPEARANCE (Independent Colors, Borders, Glow, Fonts) */}
                 {customizeSubTab === 'appearance' && (
                   <div className="kb-list-container">
                     {(
@@ -1333,7 +1952,6 @@ export default function App(): JSX.Element {
                   </div>
                 )}
 
-                {/* SUB-TAB 3: TASKBAR & LAYOUT CUSTOMIZATION */}
                 {customizeSubTab === 'taskbar' && (
                   <div className="kb-list-container">
                     <div className="kb-setting-group">
@@ -1451,7 +2069,6 @@ export default function App(): JSX.Element {
                   </div>
                 )}
 
-                {/* SUB-TAB 4: INDIVIDUAL TAB & TAB STRIP CUSTOMIZATION */}
                 {customizeSubTab === 'tabs' && (
                   <div className="kb-list-container">
                     <div className="kb-setting-group">
@@ -1585,7 +2202,6 @@ export default function App(): JSX.Element {
                       />
                     </div>
 
-                    {/* Per-Tab Individual Customization Override */}
                     {activeTab && (
                       <div
                         className="kb-card-item"
@@ -1650,16 +2266,12 @@ export default function App(): JSX.Element {
                   </div>
                 )}
 
-                {/* SUB-TAB 5: SEARCH / ADDRESS BAR CUSTOMIZATION */}
                 {customizeSubTab === 'searchbar' && (
                   <div className="kb-list-container">
                     <div className="kb-setting-group">
                       <label className="kb-setting-label">
                         Search Bar Total Width ({custom.searchBar.widthPercent}%)
                       </label>
-                      <span className="kb-setting-desc">
-                        Make the search bar compact (30%) or full-width (100%).
-                      </span>
                       <input
                         type="range"
                         min={30}
@@ -1790,15 +2402,13 @@ export default function App(): JSX.Element {
                   </div>
                 )}
 
-                {/* SUB-TAB 6: BROWSER SOUND SYSTEM */}
                 {customizeSubTab === 'sounds' && (
                   <div className="kb-list-container">
                     <div className="kb-checkbox-row">
                       <div>
                         <div className="kb-setting-label">Enable Browser Sound Effects</div>
                         <div className="kb-setting-desc">
-                          Disabled by default. Uses zero-latency Web Audio synthesis or custom audio
-                          uploads.
+                          Uses zero-latency Web Audio synthesis or custom audio uploads.
                         </div>
                       </div>
                       <input
@@ -1931,7 +2541,6 @@ export default function App(): JSX.Element {
                   </div>
                 )}
 
-                {/* SUB-TAB 7: LIVE CUSTOM CSS EDITOR */}
                 {customizeSubTab === 'css' && (
                   <div className="kb-list-container">
                     <span className="kb-setting-desc">
@@ -2403,7 +3012,6 @@ export default function App(): JSX.Element {
         )}
       </main>
 
-      {/* Render Taskbar at Bottom if configured */}
       {custom.taskbar.position === 'bottom' && renderNavbarRow(true)}
     </div>
   )

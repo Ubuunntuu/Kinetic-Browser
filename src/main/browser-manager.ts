@@ -2,25 +2,45 @@ import { BaseWindow, DownloadItem, session, shell, WebContentsView } from 'elect
 import { randomUUID } from 'crypto'
 import * as path from 'path'
 import {
+  BlockedRequestLog,
   BookmarkItem,
   BrowserSettings,
   BrowserStatePayload,
   CustomizationProfile,
   DownloadEntry,
   KINETIC_NEWTAB_URL,
+  PermissionPolicy,
+  PermissionType,
+  PrivacyConfig,
   QuickLinkItem,
   SavedSessionTab,
   SEARCH_ENGINES,
+  SecurityConfig,
   TabCustomStyle,
   TabState,
   UserProfile
 } from '../shared/types'
 import { SettingsStorage } from './storage'
+import {
+  applyDnsOverHttpsConfig,
+  evaluateNetworkRequest,
+  extractHostname,
+  injectDomScrubberAndProtections,
+  stripUrlTrackingParameters
+} from './privacy-engine'
 
 interface ManagedTab {
   state: TabState
   view: WebContentsView
 }
+
+const SUPPORTED_PERMISSIONS = new Set<PermissionType>([
+  'media',
+  'geolocation',
+  'notifications',
+  'clipboard-read',
+  'midi'
+])
 
 export class BrowserManager {
   private baseWindow: BaseWindow
@@ -33,12 +53,16 @@ export class BrowserManager {
   private rightDrawerWidth: number = 420
   private activeDownloads: Map<string, DownloadItem> = new Map()
   private hookedPartitions: Set<string> = new Set()
+  private blockedLogs: BlockedRequestLog[] = []
 
   constructor(baseWindow: BaseWindow, uiView: WebContentsView, storage: SettingsStorage) {
     this.baseWindow = baseWindow
     this.uiView = uiView
     this.storage = storage
     this.rightDrawerWidth = storage.getSettings().sidebarOpenWidth
+
+    // Apply initial DNS-over-HTTPS resolver configuration
+    applyDnsOverHttpsConfig(this.storage.getPrivacyConfig().dohProvider)
 
     this.baseWindow.on('resize', () => this.updateLayoutBounds())
     this.baseWindow.on('maximize', () => {
@@ -51,6 +75,7 @@ export class BrowserManager {
     })
     this.baseWindow.on('close', () => {
       this.persistCurrentSession()
+      this.storage.saveToDisk()
     })
   }
 
@@ -83,14 +108,112 @@ export class BrowserManager {
     }
   }
 
-  private ensureDownloadListenerForPartition(partitionName: string): void {
+  private ensurePartitionHooks(partitionName: string): void {
     if (this.hookedPartitions.has(partitionName)) return
     this.hookedPartitions.add(partitionName)
 
     const targetSession = session.fromPartition(partitionName)
+
+    // 1. Network-Level Ad/Tracker Blocker & URL Tracking Parameter Stripper
+    targetSession.webRequest.onBeforeRequest((details, callback) => {
+      const privacyCfg = this.storage.getPrivacyConfig()
+      const reqUrl = details.url
+
+      if (!reqUrl.startsWith('http')) {
+        callback({ cancel: false })
+        return
+      }
+
+      // Find associated tab if any
+      let associatedTab: ManagedTab | undefined
+      for (const tab of this.tabs.values()) {
+        if (tab.view.webContents.id === details.webContentsId) {
+          associatedTab = tab
+          break
+        }
+      }
+
+      const pageUrl = associatedTab?.state.url || details.referrer || ''
+
+      // Strip tracking query parameters on top-level navigation
+      if (details.resourceType === 'mainFrame' && privacyCfg.stripTrackingParams) {
+        const { cleanedUrl, removedCount } = stripUrlTrackingParameters(reqUrl)
+        if (removedCount > 0 && cleanedUrl !== reqUrl) {
+          this.storage.incrementPrivacyStat('param', removedCount)
+          this.recordBlockLog(reqUrl, 'param-strip', `Stripped ${removedCount} tracking params`)
+          callback({ redirectURL: cleanedUrl })
+          return
+        }
+      }
+
+      // Evaluate Ad / Tracker / Custom Rules
+      const result = evaluateNetworkRequest(reqUrl, pageUrl, privacyCfg)
+      if (result.blocked && result.category) {
+        this.storage.incrementPrivacyStat(result.category === 'ad' ? 'ad' : 'tracker', 1)
+        if (associatedTab) {
+          associatedTab.state.blockedCount += 1
+        }
+        this.recordBlockLog(reqUrl, result.category, result.rule || 'Filter match')
+        callback({ cancel: true })
+        return
+      }
+
+      callback({ cancel: false })
+    })
+
+    // 2. Privacy Request Headers (DNT / Sec-GPC / Referrer Trimming)
+    targetSession.webRequest.onBeforeSendHeaders((details, callback) => {
+      const privacyCfg = this.storage.getPrivacyConfig()
+      const headers = { ...details.requestHeaders }
+
+      if (privacyCfg.sendDoNotTrack) {
+        headers['DNT'] = '1'
+        headers['Sec-GPC'] = '1'
+      }
+
+      callback({ requestHeaders: headers })
+    })
+
+    // 3. Granular Website Permission Interceptor
+    targetSession.setPermissionRequestHandler((webContents, permission, callback) => {
+      const secCfg = this.storage.getSecurityConfig()
+      const origin = extractHostname(webContents.getURL())
+      const permKey = permission as PermissionType
+
+      if (!SUPPORTED_PERMISSIONS.has(permKey)) {
+        callback(false)
+        return
+      }
+
+      const siteOverride = secCfg.sitePermissions.find(
+        (s) => s.origin === origin && s.permission === permKey
+      )
+      if (siteOverride) {
+        callback(siteOverride.policy === 'allow')
+        return
+      }
+
+      const defaultPolicy = secCfg.defaultPermissions[permKey] || 'block'
+      if (origin) {
+        this.storage.setSitePermission(origin, permKey, defaultPolicy)
+        this.broadcastState()
+      }
+      callback(defaultPolicy === 'allow')
+    })
+
+    // 4. Download Listener
     targetSession.on('will-download', (_event, item) => {
       const downloadId = randomUUID()
       const fileName = item.getFilename()
+
+      // Security check for dangerous executable extensions if enabled
+      const secCfg = this.storage.getSecurityConfig()
+      if (secCfg.blockDangerousDownloads && /\.(scr|bat|cmd|vbs|ps1)$/i.test(fileName)) {
+        console.warn(`[SecurityEngine] Blocked potentially dangerous script download: ${fileName}`)
+        item.cancel()
+        return
+      }
+
       const downloadsDir = path.join(process.env.USERPROFILE || '', 'Downloads')
       const savePath = path.join(downloadsDir, fileName)
       item.setSavePath(savePath)
@@ -137,9 +260,28 @@ export class BrowserManager {
     })
   }
 
+  private recordBlockLog(
+    url: string,
+    category: BlockedRequestLog['category'],
+    ruleMatched: string
+  ): void {
+    this.blockedLogs.unshift({
+      id: randomUUID(),
+      url: url.slice(0, 180),
+      domain: extractHostname(url),
+      category,
+      ruleMatched,
+      timestamp: Date.now()
+    })
+    if (this.blockedLogs.length > 120) {
+      this.blockedLogs = this.blockedLogs.slice(0, 120)
+    }
+  }
+
   public resolveInputToUrl(rawInput: string): string {
     const trimmed = rawInput.trim()
     const settings = this.storage.getSettings()
+    const privacyCfg = this.storage.getPrivacyConfig()
     const engine = SEARCH_ENGINES[settings.searchEngine] || SEARCH_ENGINES.google
 
     if (!trimmed || trimmed.toLowerCase() === KINETIC_NEWTAB_URL) {
@@ -147,6 +289,9 @@ export class BrowserManager {
     }
 
     if (/^(https?:\/\/|file:\/\/|chrome:\/\/|about:)/i.test(trimmed)) {
+      if (privacyCfg.httpsUpgrade && trimmed.startsWith('http://') && !trimmed.includes('localhost')) {
+        return trimmed.replace(/^http:\/\//i, 'https://')
+      }
       return trimmed
     }
 
@@ -185,7 +330,7 @@ export class BrowserManager {
       ? `kinetic-private-${tabId}`
       : `persist:kinetic-profile-${profileId}`
 
-    this.ensureDownloadListenerForPartition(partitionName)
+    this.ensurePartitionHooks(partitionName)
 
     const view = new WebContentsView({
       webPreferences: {
@@ -202,7 +347,7 @@ export class BrowserManager {
     const cleanUA = defaultUA
       .replace(/\sElectron\/[\d.]+/, '')
       .replace(/\skinetic-browser\/[\d.]+/i, '')
-    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.4.0`)
+    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.5.0`)
 
     const initialState: TabState = {
       id: tabId,
@@ -219,7 +364,10 @@ export class BrowserManager {
       isPinned: Boolean(options?.isPinned),
       isPrivate,
       profileId,
-      customStyle: options?.customStyle
+      customStyle: options?.customStyle,
+      blockedCount: 0,
+      scrubbedElementsCount: 0,
+      isScrubberRestored: false
     }
 
     this.tabs.set(tabId, { state: initialState, view })
@@ -301,14 +449,29 @@ export class BrowserManager {
       if (!tab || tab.state.url === KINETIC_NEWTAB_URL) return
       tab.state.isLoading = true
       tab.state.hasCertError = false
+      tab.state.blockedCount = 0
+      tab.state.scrubbedElementsCount = 0
+      tab.state.isScrubberRestored = false
       syncNavigationState(false)
     })
 
-    wc.on('did-stop-loading', () => {
+    wc.on('did-stop-loading', async () => {
       const tab = this.tabs.get(tabId)
       if (!tab || tab.state.url === KINETIC_NEWTAB_URL) return
       tab.state.isLoading = false
       syncNavigationState(true)
+
+      // Run DOM Scrubber & Fingerprinting Protections on loaded page
+      const scrubbed = await injectDomScrubberAndProtections(
+        wc,
+        this.storage.getPrivacyConfig(),
+        tab.state.isScrubberRestored
+      )
+      if (scrubbed > 0) {
+        tab.state.scrubbedElementsCount = scrubbed
+        this.storage.incrementPrivacyStat('scrub', scrubbed)
+        this.broadcastState()
+      }
     })
 
     wc.on('did-navigate', () => syncNavigationState(true))
@@ -507,6 +670,8 @@ export class BrowserManager {
       active.state.favicon = ''
       active.state.isLoading = false
       active.state.isSecure = true
+      active.state.blockedCount = 0
+      active.state.scrubbedElementsCount = 0
       this.updateLayoutBounds()
       this.broadcastState()
       return
@@ -563,6 +728,106 @@ export class BrowserManager {
     }
   }
 
+  // Phase 5 Privacy & Security Operations
+  public updatePrivacyConfig(partial: Partial<PrivacyConfig>): PrivacyConfig {
+    const updated = this.storage.updatePrivacyConfig(partial)
+    if (partial.dohProvider) {
+      applyDnsOverHttpsConfig(updated.dohProvider)
+    }
+    this.broadcastState()
+    return updated
+  }
+
+  public toggleDomainWhitelist(domain: string): PrivacyConfig {
+    const updated = this.storage.toggleDomainWhitelist(domain)
+    this.reload()
+    this.broadcastState()
+    return updated
+  }
+
+  public addCustomBlockRule(rule: string): PrivacyConfig {
+    const updated = this.storage.addCustomBlockRule(rule)
+    this.broadcastState()
+    return updated
+  }
+
+  public removeCustomBlockRule(rule: string): PrivacyConfig {
+    const updated = this.storage.removeCustomBlockRule(rule)
+    this.broadcastState()
+    return updated
+  }
+
+  public async toggleRestoreScrubbedElements(): Promise<void> {
+    const active = this.getActiveTab()
+    if (!active || active.state.url === KINETIC_NEWTAB_URL) return
+
+    const nextRestored = !active.state.isScrubberRestored
+    active.state.isScrubberRestored = nextRestored
+    const count = await injectDomScrubberAndProtections(
+      active.view.webContents,
+      this.storage.getPrivacyConfig(),
+      nextRestored
+    )
+    if (!nextRestored) {
+      active.state.scrubbedElementsCount = count
+    }
+    this.broadcastState()
+  }
+
+  public clearBlockedLogs(): void {
+    this.blockedLogs = []
+    this.broadcastState()
+  }
+
+  public async clearBrowsingData(options: {
+    cookies: boolean
+    cache: boolean
+    history: boolean
+    downloads: boolean
+  }): Promise<void> {
+    const profileId = this.storage.getActiveProfileId()
+    const targetSession = session.fromPartition(`persist:kinetic-profile-${profileId}`)
+
+    if (options.cookies) {
+      await targetSession.clearStorageData({
+        storages: ['cookies', 'localstorage', 'indexdb', 'serviceworkers']
+      })
+    }
+    if (options.cache) {
+      await targetSession.clearCache()
+    }
+    if (options.history) {
+      this.storage.clearHistory(profileId)
+    }
+    if (options.downloads) {
+      this.storage.clearCompletedDownloads()
+    }
+    this.broadcastState()
+  }
+
+  public updateSecurityConfig(partial: Partial<SecurityConfig>): SecurityConfig {
+    const updated = this.storage.updateSecurityConfig(partial)
+    this.broadcastState()
+    return updated
+  }
+
+  public setSitePermission(
+    origin: string,
+    permission: PermissionType,
+    policy: PermissionPolicy
+  ): SecurityConfig {
+    const updated = this.storage.setSitePermission(origin, permission, policy)
+    this.broadcastState()
+    return updated
+  }
+
+  public removeSitePermission(id: string): SecurityConfig {
+    const updated = this.storage.removeSitePermission(id)
+    this.broadcastState()
+    return updated
+  }
+
+  // History, Bookmarks, QuickLinks, Downloads, Profiles
   public deleteHistoryItem(id: string): void {
     this.storage.deleteHistoryItem(id)
     this.broadcastState()
@@ -816,6 +1081,10 @@ export class BrowserManager {
       settings: this.storage.getSettings(),
       customization: this.storage.getCustomization(),
       savedThemes: this.storage.getAllThemes(),
+      privacyConfig: this.storage.getPrivacyConfig(),
+      privacyStats: this.storage.getPrivacyStats(),
+      blockedLogs: this.blockedLogs,
+      securityConfig: this.storage.getSecurityConfig(),
       history: this.storage.getHistory(),
       bookmarks: this.storage.getBookmarks(),
       bookmarkFolders: this.storage.getBookmarkFolders(),

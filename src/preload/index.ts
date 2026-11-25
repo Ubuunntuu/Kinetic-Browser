@@ -4,6 +4,10 @@ import {
   BrowserStatePayload,
   CustomizationProfile,
   KineticAPI,
+  PermissionPolicy,
+  PermissionType,
+  PrivacyConfig,
+  SecurityConfig,
   TabCustomStyle
 } from '../shared/types'
 
@@ -58,6 +62,28 @@ const kineticApi: KineticAPI = {
   importCustomizationJson: (jsonString: string) =>
     ipcRenderer.invoke('kinetic:import-customization-json', jsonString),
   resetCustomization: () => ipcRenderer.invoke('kinetic:reset-customization'),
+
+  // Phase 5 Privacy & Security
+  updatePrivacyConfig: (partial: Partial<PrivacyConfig>) =>
+    ipcRenderer.invoke('kinetic:update-privacy-config', partial),
+  toggleDomainWhitelist: (domain: string) =>
+    ipcRenderer.invoke('kinetic:toggle-domain-whitelist', domain),
+  addCustomBlockRule: (rule: string) =>
+    ipcRenderer.invoke('kinetic:add-custom-block-rule', rule),
+  removeCustomBlockRule: (rule: string) =>
+    ipcRenderer.invoke('kinetic:remove-custom-block-rule', rule),
+  toggleRestoreScrubbedElements: () =>
+    ipcRenderer.invoke('kinetic:toggle-restore-scrubbed'),
+  clearBlockedLogs: () => ipcRenderer.invoke('kinetic:clear-blocked-logs'),
+  clearBrowsingData: (options) =>
+    ipcRenderer.invoke('kinetic:clear-browsing-data', options),
+
+  updateSecurityConfig: (partial: Partial<SecurityConfig>) =>
+    ipcRenderer.invoke('kinetic:update-security-config', partial),
+  setSitePermission: (origin: string, permission: PermissionType, policy: PermissionPolicy) =>
+    ipcRenderer.invoke('kinetic:set-site-permission', origin, permission, policy),
+  removeSitePermission: (id: string) =>
+    ipcRenderer.invoke('kinetic:remove-site-permission', id),
 
   setRightDrawerOpen: (isOpen: boolean, width?: number) =>
     ipcRenderer.invoke('kinetic:set-right-drawer', isOpen, width),
