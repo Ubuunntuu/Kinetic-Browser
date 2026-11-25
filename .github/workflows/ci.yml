@@ -1,0 +1,36 @@
+﻿name: Kinetic Browser CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify-and-build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify Repository Structure
+        shell: pwsh
+        run: |
+          Write-Host "Verifying Kinetic Browser repository structure..."
+          $RequiredFiles = @("README.md", "LICENSE", "SECURITY.md", "CONTRIBUTING.md", "docs/architecture/SYSTEM_ARCHITECTURE.md")
+          foreach ($File in $RequiredFiles) {
+            if (-not (Test-Path $File)) {
+              Write-Error "Missing required file: $File"
+              exit 1
+            }
+          }
+          if (Test-Path "package.json") {
+            npm ci
+            npm run typecheck
+            npm run build
+          }
