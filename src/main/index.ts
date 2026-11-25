@@ -1,4 +1,4 @@
-﻿import { app, BaseWindow, ipcMain, WebContentsView } from 'electron'
+import { app, BaseWindow, ipcMain, WebContentsView } from 'electron'
 import { join } from 'path'
 import { BrowserManager } from './browser-manager'
 import { SettingsStorage } from './storage'

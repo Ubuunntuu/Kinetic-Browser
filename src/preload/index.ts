@@ -1,4 +1,4 @@
-﻿import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { BrowserSettings, BrowserStatePayload, KineticAPI } from '../shared/types'
 
 const kineticApi: KineticAPI = {

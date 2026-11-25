@@ -1,4 +1,4 @@
-﻿# KINETIC BROWSER
+# KINETIC BROWSER
 
 **The Browser Built for Gamers Who Want Complete Control.**
 

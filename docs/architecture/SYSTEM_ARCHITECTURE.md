@@ -1,4 +1,4 @@
-﻿# Kinetic Browser — System Architecture Specification (Phase 1)
+# Kinetic Browser — System Architecture Specification (Phase 1)
 
 ## 1. Multi-Process Rendering Architecture
 

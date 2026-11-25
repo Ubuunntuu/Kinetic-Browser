@@ -1,4 +1,4 @@
-﻿import { BaseWindow, WebContentsView } from 'electron'
+import { BaseWindow, WebContentsView } from 'electron'
 import { randomUUID } from 'crypto'
 import {
   BrowserSettings,

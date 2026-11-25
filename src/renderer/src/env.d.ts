@@ -1,4 +1,4 @@
-﻿/// <reference types="vite/client" />
+/// <reference types="vite/client" />
 import { KineticAPI } from '../../shared/types'
 
 declare global {

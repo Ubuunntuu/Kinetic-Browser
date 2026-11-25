@@ -1,4 +1,4 @@
-﻿export type SearchEngineId = 'duckduckgo' | 'google' | 'brave' | 'bing' | 'startpage'
+export type SearchEngineId = 'duckduckgo' | 'google' | 'brave' | 'bing' | 'startpage'
 
 export interface SearchEngineConfig {
   id: SearchEngineId

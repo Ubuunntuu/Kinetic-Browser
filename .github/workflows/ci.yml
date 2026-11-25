@@ -1,4 +1,4 @@
-﻿name: Kinetic Browser CI
+name: Kinetic Browser CI
 
 on:
   push:

@@ -1,4 +1,4 @@
-﻿import { app } from 'electron'
+import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 import { BrowserSettings, DEFAULT_SETTINGS, SEARCH_ENGINES } from '../shared/types'

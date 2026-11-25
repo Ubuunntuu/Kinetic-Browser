@@ -1,4 +1,4 @@
-﻿# Contributing to Kinetic Browser
+# Contributing to Kinetic Browser
 
 We follow strict engineering standards to ensure Kinetic Browser remains fast, secure, and maintainable.
 

@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to Kinetic Browser are documented in this file.
 
