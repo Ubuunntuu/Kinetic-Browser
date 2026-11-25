@@ -47,13 +47,56 @@ import {
 
 const ACCENT_PRESETS = ['#00f0ff', '#ff2a6d', '#05d550', '#b537f2', '#ff8a00', '#3b82f6']
 
+function getSiteFaviconUrl(siteUrl: string, size: number = 64): string {
+  try {
+    const parsed = new URL(siteUrl)
+    return `https://www.google.com/s2/favicons?domain=${parsed.hostname}&sz=${size}`
+  } catch {
+    return ''
+  }
+}
+
 const QUICK_LINKS = [
-  { title: 'YouTube', url: 'https://www.youtube.com', badge: 'YT' },
-  { title: 'Twitch', url: 'https://www.twitch.tv', badge: 'TW' },
-  { title: 'Steam', url: 'https://store.steampowered.com', badge: 'ST' },
-  { title: 'Reddit', url: 'https://www.reddit.com', badge: 'RD' },
-  { title: 'GitHub', url: 'https://github.com/Ubuunntuu/Kinetic-Browser', badge: 'GH' },
-  { title: 'PCGamingWiki', url: 'https://www.pcgamingwiki.com', badge: 'PC' }
+  {
+    title: 'YouTube',
+    url: 'https://www.youtube.com',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=youtube.com&sz=64'
+  },
+  {
+    title: 'Twitch',
+    url: 'https://www.twitch.tv',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=twitch.tv&sz=64'
+  },
+  {
+    title: 'Steam',
+    url: 'https://store.steampowered.com',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=store.steampowered.com&sz=64'
+  },
+  {
+    title: 'Discord',
+    url: 'https://discord.com/app',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=discord.com&sz=64'
+  },
+  {
+    title: 'Reddit',
+    url: 'https://www.reddit.com',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=reddit.com&sz=64'
+  },
+  {
+    title: 'Spotify',
+    url: 'https://open.spotify.com',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=open.spotify.com&sz=64'
+  },
+  {
+    title: 'GitHub',
+    url: 'https://github.com/Ubuunntuu/Kinetic-Browser',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=github.com&sz=64'
+  },
+  {
+    title: 'PCGamingWiki',
+    url: 'https://www.pcgamingwiki.com',
+    iconUrl: 'https://www.google.com/s2/favicons?domain=pcgamingwiki.com&sz=64'
+  }
 ]
 
 function formatBytes(bytes: number): string {
@@ -141,7 +184,6 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     if (!isAddressFocused && activeTab) {
-      // Keep address bar clean when on Kinetic New Tab Studio
       setAddressInput(activeTab.url === KINETIC_NEWTAB_URL ? '' : activeTab.url)
     }
   }, [activeTab?.url, activeTabId, isAddressFocused])
@@ -173,7 +215,7 @@ export default function App(): JSX.Element {
       await window.kinetic.addBookmark({
         title: activeTab.title,
         url: activeTab.url,
-        favicon: activeTab.favicon,
+        favicon: activeTab.favicon || getSiteFaviconUrl(activeTab.url, 32),
         folder: 'Bookmarks Bar'
       })
     }
@@ -217,7 +259,7 @@ export default function App(): JSX.Element {
     <div className="kb-shell">
       {/* TOP BROWSER CHROME */}
       <header className="kb-chrome">
-        {/* ROW 1: CLEAN TAB STRIP (No Clutter Badges) */}
+        {/* ROW 1: CLEAN TAB STRIP */}
         <div className="kb-tabstrip-row">
           <div className="kb-tabs-container">
             {tabs.map((tab) => {
@@ -364,7 +406,10 @@ export default function App(): JSX.Element {
                 <span>PRIVATE</span>
               </span>
             ) : isNewTabActive ? (
-              <span className="kb-security-badge neutral" title={`Active Search Engine: ${currentEngine.name}`}>
+              <span
+                className="kb-security-badge neutral"
+                title={`Active Search Engine: ${currentEngine.name}`}
+              >
                 <Search size={12} />
                 <span>{currentEngine.name.toUpperCase()}</span>
               </span>
@@ -433,7 +478,6 @@ export default function App(): JSX.Element {
               </>
             )}
 
-            {/* Private Tab button relocated to right action bar */}
             <button
               type="button"
               className="kb-icon-btn private-btn"
@@ -500,24 +544,31 @@ export default function App(): JSX.Element {
           </div>
         </div>
 
-        {/* ROW 3: BOOKMARKS BAR */}
+        {/* ROW 3: BOOKMARKS BAR WITH REAL SITE FAVICONS */}
         {settings.showBookmarksBar && (
           <div className="kb-bookmarks-bar">
-            {bookmarks.map((bm) => (
-              <button
-                key={bm.id}
-                type="button"
-                className="kb-bm-pill"
-                onClick={() => window.kinetic.navigate(bm.url)}
-                onAuxClick={(e) => {
-                  if (e.button === 1) window.kinetic.createTab(bm.url)
-                }}
-                title={`${bm.title}\n${bm.url}`}
-              >
-                <Star size={11} color="var(--kb-accent)" />
-                <span>{bm.title}</span>
-              </button>
-            ))}
+            {bookmarks.map((bm) => {
+              const iconSrc = bm.favicon || getSiteFaviconUrl(bm.url, 32)
+              return (
+                <button
+                  key={bm.id}
+                  type="button"
+                  className="kb-bm-pill"
+                  onClick={() => window.kinetic.navigate(bm.url)}
+                  onAuxClick={(e) => {
+                    if (e.button === 1) window.kinetic.createTab(bm.url)
+                  }}
+                  title={`${bm.title}\n${bm.url}`}
+                >
+                  {iconSrc ? (
+                    <img src={iconSrc} alt="" className="kb-bm-icon" />
+                  ) : (
+                    <Globe size={12} color="var(--kb-accent)" />
+                  )}
+                  <span>{bm.title}</span>
+                </button>
+              )
+            })}
           </div>
         )}
       </header>
@@ -574,7 +625,7 @@ export default function App(): JSX.Element {
                 </button>
               </form>
 
-              {/* Speed Dial Grid */}
+              {/* Speed Dial Grid with Official Site Logos */}
               <div className="kb-speed-dial-grid">
                 {QUICK_LINKS.map((item) => (
                   <div
@@ -586,7 +637,13 @@ export default function App(): JSX.Element {
                     }}
                     title={item.url}
                   >
-                    <div className="kb-speed-icon">{item.badge}</div>
+                    <div className="kb-speed-icon-box">
+                      <img
+                        src={item.iconUrl}
+                        alt={item.title}
+                        className="kb-speed-logo-img"
+                      />
+                    </div>
                     <span className="kb-speed-label">{item.title}</span>
                   </div>
                 ))}
@@ -649,6 +706,11 @@ export default function App(): JSX.Element {
                   ) : (
                     filteredBookmarks.map((bm) => (
                       <div key={bm.id} className="kb-card-item">
+                        <img
+                          src={bm.favicon || getSiteFaviconUrl(bm.url, 32)}
+                          alt=""
+                          className="kb-bm-icon"
+                        />
                         <div
                           className="kb-card-main"
                           onClick={() => window.kinetic.navigate(bm.url)}
@@ -700,6 +762,11 @@ export default function App(): JSX.Element {
                   ) : (
                     filteredHistory.map((item) => (
                       <div key={item.id} className="kb-card-item">
+                        <img
+                          src={item.favicon || getSiteFaviconUrl(item.url, 32)}
+                          alt=""
+                          className="kb-bm-icon"
+                        />
                         <div
                           className="kb-card-main"
                           onClick={() => window.kinetic.navigate(item.url)}
