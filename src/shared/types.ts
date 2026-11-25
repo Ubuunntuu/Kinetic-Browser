@@ -42,6 +42,8 @@ export const SEARCH_ENGINES: Record<SearchEngineId, SearchEngineConfig> = {
   }
 }
 
+export const KINETIC_NEWTAB_URL = 'kinetic://newtab'
+
 export interface TabState {
   id: string
   title: string
@@ -118,9 +120,9 @@ export interface BrowserSettings {
 }
 
 export const DEFAULT_SETTINGS: BrowserSettings = {
-  searchEngine: 'duckduckgo',
-  homepageUrl: 'https://duckduckgo.com',
-  newTabUrl: 'https://duckduckgo.com',
+  searchEngine: 'google',
+  homepageUrl: KINETIC_NEWTAB_URL,
+  newTabUrl: KINETIC_NEWTAB_URL,
   restorePreviousSession: true,
   showBookmarksBar: true,
   accentColor: '#00f0ff',
@@ -143,7 +145,6 @@ export interface BrowserStatePayload {
 }
 
 export interface KineticAPI {
-  // Tab Management
   createTab: (url?: string, options?: { isPrivate?: boolean }) => Promise<string>
   closeTab: (tabId: string) => Promise<void>
   switchTab: (tabId: string) => Promise<void>
@@ -151,7 +152,6 @@ export interface KineticAPI {
   togglePinTab: (tabId: string) => Promise<void>
   toggleMuteTab: (tabId: string) => Promise<void>
 
-  // Navigation
   navigate: (input: string) => Promise<void>
   goBack: () => Promise<void>
   goForward: () => Promise<void>
@@ -160,41 +160,33 @@ export interface KineticAPI {
   goHome: () => Promise<void>
   toggleDevTools: () => Promise<void>
 
-  // History Subsystem
   deleteHistoryItem: (id: string) => Promise<void>
   clearHistory: () => Promise<void>
 
-  // Bookmarks Subsystem
   addBookmark: (data: { title: string; url: string; favicon?: string; folder?: string }) => Promise<BookmarkItem>
   removeBookmark: (id: string) => Promise<void>
   createBookmarkFolder: (folderName: string) => Promise<string[]>
 
-  // Downloads Subsystem
   pauseDownload: (id: string) => Promise<void>
   resumeDownload: (id: string) => Promise<void>
   cancelDownload: (id: string) => Promise<void>
   showDownloadInFolder: (id: string) => Promise<void>
   clearCompletedDownloads: () => Promise<void>
 
-  // Profiles Subsystem
   createProfile: (name: string, color: string) => Promise<UserProfile>
   switchProfile: (profileId: string) => Promise<void>
   deleteProfile: (profileId: string) => Promise<void>
 
-  // Layout & Overlays
   setRightDrawerOpen: (isOpen: boolean, width?: number) => Promise<void>
 
-  // Settings
   getSettings: () => Promise<BrowserSettings>
   updateSettings: (partial: Partial<BrowserSettings>) => Promise<BrowserSettings>
   resetSettings: () => Promise<BrowserSettings>
 
-  // Window Controls
   minimizeWindow: () => Promise<void>
   maximizeOrRestoreWindow: () => Promise<void>
   closeWindow: () => Promise<void>
 
-  // State Subscription
   getInitialState: () => Promise<BrowserStatePayload>
   onStateChanged: (callback: (state: BrowserStatePayload) => void) => () => void
 }

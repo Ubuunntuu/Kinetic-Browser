@@ -16,7 +16,7 @@ import {
   VolumeX,
   Minus,
   Square,
-  Zap,
+  Globe,
   Star,
   Bookmark,
   History,
@@ -27,7 +27,8 @@ import {
   FolderOpen,
   Pause,
   Play,
-  FolderPlus
+  FolderPlus,
+  Search
 } from 'lucide-react'
 import {
   BookmarkItem,
@@ -37,6 +38,7 @@ import {
   DownloadEntry,
   DrawerPanelId,
   HistoryEntry,
+  KINETIC_NEWTAB_URL,
   SEARCH_ENGINES,
   SearchEngineId,
   TabState,
@@ -44,6 +46,15 @@ import {
 } from '../../shared/types'
 
 const ACCENT_PRESETS = ['#00f0ff', '#ff2a6d', '#05d550', '#b537f2', '#ff8a00', '#3b82f6']
+
+const QUICK_LINKS = [
+  { title: 'YouTube', url: 'https://www.youtube.com', badge: 'YT' },
+  { title: 'Twitch', url: 'https://www.twitch.tv', badge: 'TW' },
+  { title: 'Steam', url: 'https://store.steampowered.com', badge: 'ST' },
+  { title: 'Reddit', url: 'https://www.reddit.com', badge: 'RD' },
+  { title: 'GitHub', url: 'https://github.com/Ubuunntuu/Kinetic-Browser', badge: 'GH' },
+  { title: 'PCGamingWiki', url: 'https://www.pcgamingwiki.com', badge: 'PC' }
+]
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B'
@@ -65,8 +76,10 @@ export default function App(): JSX.Element {
   const [activeProfileId, setActiveProfileId] = useState<string>('default')
 
   const [addressInput, setAddressInput] = useState<string>('')
+  const [newTabSearchQuery, setNewTabSearchQuery] = useState<string>('')
   const [isAddressFocused, setIsAddressFocused] = useState<boolean>(false)
   const [activeDrawer, setActiveDrawer] = useState<DrawerPanelId>('none')
+  const [clockNow, setClockNow] = useState<Date>(new Date())
 
   // Panel Filters & Forms
   const [historySearch, setHistorySearch] = useState<string>('')
@@ -78,9 +91,16 @@ export default function App(): JSX.Element {
   const [newTabDraft, setNewTabDraft] = useState<string>(DEFAULT_SETTINGS.newTabUrl)
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || null
-  const activeProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0]
-  const currentBookmark = activeTab ? bookmarks.find((b) => b.url === activeTab.url) : undefined
+  const isNewTabActive = !activeTab || activeTab.url === KINETIC_NEWTAB_URL
+  const currentEngine = SEARCH_ENGINES[settings.searchEngine] || SEARCH_ENGINES.google
+  const currentBookmark =
+    activeTab && !isNewTabActive ? bookmarks.find((b) => b.url === activeTab.url) : undefined
   const hasActiveDownloads = downloads.some((d) => d.status === 'progressing')
+
+  useEffect(() => {
+    const timer = setInterval(() => setClockNow(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     const applyState = (payload: BrowserStatePayload): void => {
@@ -121,7 +141,8 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     if (!isAddressFocused && activeTab) {
-      setAddressInput(activeTab.url)
+      // Keep address bar clean when on Kinetic New Tab Studio
+      setAddressInput(activeTab.url === KINETIC_NEWTAB_URL ? '' : activeTab.url)
     }
   }, [activeTab?.url, activeTabId, isAddressFocused])
 
@@ -137,8 +158,15 @@ export default function App(): JSX.Element {
     ;(document.activeElement as HTMLElement | null)?.blur()
   }
 
+  const handleNewTabSearchSubmit = (e: React.FormEvent): void => {
+    e.preventDefault()
+    if (!newTabSearchQuery.trim()) return
+    window.kinetic.navigate(newTabSearchQuery)
+    setNewTabSearchQuery('')
+  }
+
   const handleToggleBookmarkActiveTab = async (): Promise<void> => {
-    if (!activeTab) return
+    if (!activeTab || isNewTabActive) return
     if (currentBookmark) {
       await window.kinetic.removeBookmark(currentBookmark.id)
     } else {
@@ -189,28 +217,8 @@ export default function App(): JSX.Element {
     <div className="kb-shell">
       {/* TOP BROWSER CHROME */}
       <header className="kb-chrome">
-        {/* ROW 1: TAB STRIP */}
+        {/* ROW 1: CLEAN TAB STRIP (No Clutter Badges) */}
         <div className="kb-tabstrip-row">
-          <div className="kb-brand-badge" title="Kinetic Browser Core v0.3.0">
-            <Zap size={13} />
-            <span>KINETIC</span>
-          </div>
-
-          {activeProfile && (
-            <button
-              type="button"
-              className="kb-profile-pill"
-              onClick={() => toggleDrawerPanel('profiles')}
-              title={`Active Profile: ${activeProfile.name} (Click to switch)`}
-            >
-              <span
-                className="kb-profile-dot"
-                style={{ backgroundColor: activeProfile.color }}
-              />
-              <span>{activeProfile.name}</span>
-            </button>
-          )}
-
           <div className="kb-tabs-container">
             {tabs.map((tab) => {
               const isActive = tab.id === activeTabId
@@ -222,14 +230,14 @@ export default function App(): JSX.Element {
                   onAuxClick={(e) => {
                     if (e.button === 1) window.kinetic.closeTab(tab.id)
                   }}
-                  title={`${tab.title}\n${tab.url}${tab.isPrivate ? '\n[Private Ephemeral Session]' : ''}`}
+                  title={`${tab.title}${tab.url !== KINETIC_NEWTAB_URL ? `\n${tab.url}` : ''}${tab.isPrivate ? '\n[Private Session]' : ''}`}
                 >
                   {tab.isPrivate ? (
                     <EyeOff size={13} color="#d896ff" style={{ flexShrink: 0 }} />
                   ) : tab.favicon ? (
                     <img src={tab.favicon} alt="" className="kb-tab-favicon" />
                   ) : (
-                    <Zap size={13} style={{ flexShrink: 0, opacity: 0.7 }} />
+                    <Globe size={13} style={{ flexShrink: 0, opacity: 0.7 }} />
                   )}
 
                   {!tab.isPinned && (
@@ -273,19 +281,10 @@ export default function App(): JSX.Element {
             <button
               type="button"
               className="kb-newtab-btn"
-              title="Open New Tab"
+              title="New Tab"
               onClick={() => window.kinetic.createTab()}
             >
               <Plus size={15} />
-            </button>
-
-            <button
-              type="button"
-              className="kb-newtab-btn private"
-              title="Open New Private Tab (Isolated In-Memory Session)"
-              onClick={() => window.kinetic.createTab(undefined, { isPrivate: true })}
-            >
-              <EyeOff size={14} />
             </button>
           </div>
 
@@ -352,7 +351,7 @@ export default function App(): JSX.Element {
               type="button"
               className="kb-icon-btn"
               onClick={() => window.kinetic.goHome()}
-              title="Go to Homepage"
+              title="Home / New Tab Studio"
             >
               <Home size={15} />
             </button>
@@ -360,9 +359,14 @@ export default function App(): JSX.Element {
 
           <form className="kb-omnibox-form" onSubmit={handleNavigateSubmit}>
             {activeTab?.isPrivate ? (
-              <span className="kb-security-badge private" title="Private Browsing Tab (No History Saved)">
+              <span className="kb-security-badge private" title="Private Tab (No History Saved)">
                 <EyeOff size={12} />
                 <span>PRIVATE</span>
+              </span>
+            ) : isNewTabActive ? (
+              <span className="kb-security-badge neutral" title={`Active Search Engine: ${currentEngine.name}`}>
+                <Search size={12} />
+                <span>{currentEngine.name.toUpperCase()}</span>
               </span>
             ) : activeTab?.hasCertError ? (
               <span className="kb-security-badge error" title="Invalid TLS Certificate Blocked">
@@ -391,18 +395,20 @@ export default function App(): JSX.Element {
               }}
               onBlur={() => setIsAddressFocused(false)}
               onChange={(e) => setAddressInput(e.target.value)}
-              placeholder={`Search with ${SEARCH_ENGINES[settings.searchEngine]?.name || 'DuckDuckGo'} or enter address...`}
+              placeholder={`Search with ${currentEngine.name} or enter web address...`}
               spellCheck={false}
             />
 
-            <button
-              type="button"
-              className={`kb-star-btn ${currentBookmark ? 'bookmarked' : ''}`}
-              onClick={handleToggleBookmarkActiveTab}
-              title={currentBookmark ? 'Remove Bookmark' : 'Bookmark This Page'}
-            >
-              <Star size={15} fill={currentBookmark ? 'currentColor' : 'none'} />
-            </button>
+            {!isNewTabActive && (
+              <button
+                type="button"
+                className={`kb-star-btn ${currentBookmark ? 'bookmarked' : ''}`}
+                onClick={handleToggleBookmarkActiveTab}
+                title={currentBookmark ? 'Remove Bookmark' : 'Bookmark This Page'}
+              >
+                <Star size={15} fill={currentBookmark ? 'currentColor' : 'none'} />
+              </button>
+            )}
           </form>
 
           <div className="kb-nav-group">
@@ -412,7 +418,7 @@ export default function App(): JSX.Element {
                   type="button"
                   className={`kb-icon-btn ${activeTab.isPinned ? 'active' : ''}`}
                   onClick={() => window.kinetic.togglePinTab(activeTab.id)}
-                  title={activeTab.isPinned ? 'Unpin Active Tab' : 'Pin Active Tab'}
+                  title={activeTab.isPinned ? 'Unpin Tab' : 'Pin Tab'}
                 >
                   <Pin size={15} />
                 </button>
@@ -420,18 +426,28 @@ export default function App(): JSX.Element {
                   type="button"
                   className="kb-icon-btn"
                   onClick={() => window.kinetic.duplicateTab(activeTab.id)}
-                  title="Duplicate Active Tab"
+                  title="Duplicate Tab"
                 >
                   <Copy size={15} />
                 </button>
               </>
             )}
 
+            {/* Private Tab button relocated to right action bar */}
+            <button
+              type="button"
+              className="kb-icon-btn private-btn"
+              onClick={() => window.kinetic.createTab(undefined, { isPrivate: true })}
+              title="New Private Tab"
+            >
+              <EyeOff size={15} />
+            </button>
+
             <button
               type="button"
               className={`kb-icon-btn ${activeDrawer === 'bookmarks' ? 'active' : ''}`}
               onClick={() => toggleDrawerPanel('bookmarks')}
-              title="Bookmarks Manager"
+              title="Bookmarks"
             >
               <Bookmark size={15} />
             </button>
@@ -440,7 +456,7 @@ export default function App(): JSX.Element {
               type="button"
               className={`kb-icon-btn ${activeDrawer === 'history' ? 'active' : ''}`}
               onClick={() => toggleDrawerPanel('history')}
-              title="Browsing History"
+              title="History"
             >
               <History size={15} />
             </button>
@@ -449,7 +465,7 @@ export default function App(): JSX.Element {
               type="button"
               className={`kb-icon-btn ${activeDrawer === 'downloads' ? 'active' : ''}`}
               onClick={() => toggleDrawerPanel('downloads')}
-              title="Downloads Manager"
+              title="Downloads"
             >
               <Download size={15} />
               {hasActiveDownloads && <span className="kb-badge-dot" />}
@@ -459,7 +475,7 @@ export default function App(): JSX.Element {
               type="button"
               className={`kb-icon-btn ${activeDrawer === 'profiles' ? 'active' : ''}`}
               onClick={() => toggleDrawerPanel('profiles')}
-              title="User Profiles & Sessions"
+              title="User Profiles"
             >
               <Users size={15} />
             </button>
@@ -468,7 +484,7 @@ export default function App(): JSX.Element {
               type="button"
               className="kb-icon-btn"
               onClick={() => window.kinetic.toggleDevTools()}
-              title="Toggle Chromium Developer Tools"
+              title="Developer Tools"
             >
               <Terminal size={15} />
             </button>
@@ -477,7 +493,7 @@ export default function App(): JSX.Element {
               type="button"
               className={`kb-icon-btn ${activeDrawer === 'settings' ? 'active' : ''}`}
               onClick={() => toggleDrawerPanel('settings')}
-              title="Browser Settings"
+              title="Settings"
             >
               <Settings size={16} />
             </button>
@@ -496,7 +512,7 @@ export default function App(): JSX.Element {
                 onAuxClick={(e) => {
                   if (e.button === 1) window.kinetic.createTab(bm.url)
                 }}
-                title={`${bm.title}\n${bm.url} (${bm.folder})`}
+                title={`${bm.title}\n${bm.url}`}
               >
                 <Star size={11} color="var(--kb-accent)" />
                 <span>{bm.title}</span>
@@ -508,12 +524,83 @@ export default function App(): JSX.Element {
 
       {/* WORKSPACE AREA */}
       <main className="kb-workspace">
-        <div className="kb-webview-placeholder" />
+        {isNewTabActive ? (
+          <section className="kb-newtab-studio">
+            <div className="kb-newtab-inner">
+              <div className="kb-clock-block">
+                <div className="kb-clock-time">
+                  {clockNow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+                <div className="kb-clock-date">
+                  {clockNow.toLocaleDateString([], {
+                    weekday: 'long',
+                    month: 'short',
+                    day: 'numeric'
+                  })}
+                  {activeTab?.isPrivate ? ' • PRIVATE SESSION' : ''}
+                </div>
+              </div>
+
+              {/* Central New Tab Search Bar synced with Default Search Engine */}
+              <form className="kb-newtab-search-form" onSubmit={handleNewTabSearchSubmit}>
+                <select
+                  className="kb-engine-selector-pill"
+                  value={settings.searchEngine}
+                  onChange={(e) =>
+                    window.kinetic.updateSettings({
+                      searchEngine: e.target.value as SearchEngineId
+                    })
+                  }
+                  title="Switch Active Search Engine"
+                >
+                  {Object.values(SEARCH_ENGINES).map((eng) => (
+                    <option key={eng.id} value={eng.id}>
+                      {eng.name}
+                    </option>
+                  ))}
+                </select>
+
+                <input
+                  type="text"
+                  className="kb-newtab-search-input"
+                  value={newTabSearchQuery}
+                  onChange={(e) => setNewTabSearchQuery(e.target.value)}
+                  placeholder={`Search the web with ${currentEngine.name} or type a URL...`}
+                  autoFocus
+                />
+
+                <button type="submit" className="kb-newtab-search-btn">
+                  Search
+                </button>
+              </form>
+
+              {/* Speed Dial Grid */}
+              <div className="kb-speed-dial-grid">
+                {QUICK_LINKS.map((item) => (
+                  <div
+                    key={item.url}
+                    className="kb-speed-card"
+                    onClick={() => window.kinetic.navigate(item.url)}
+                    onAuxClick={(e) => {
+                      if (e.button === 1) window.kinetic.createTab(item.url)
+                    }}
+                    title={item.url}
+                  >
+                    <div className="kb-speed-icon">{item.badge}</div>
+                    <span className="kb-speed-label">{item.title}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        ) : (
+          <div className="kb-webview-placeholder" />
+        )}
 
         {activeDrawer !== 'none' && (
           <aside className="kb-settings-drawer">
             <div className="kb-drawer-header">
-              <span className="kb-drawer-title">{activeDrawer} MANAGER</span>
+              <span className="kb-drawer-title">{activeDrawer}</span>
               <button
                 type="button"
                 className="kb-tab-action-btn"
@@ -524,7 +611,6 @@ export default function App(): JSX.Element {
               </button>
             </div>
 
-            {/* PANEL 1: BOOKMARKS */}
             {activeDrawer === 'bookmarks' && (
               <>
                 <div className="kb-setting-group">
@@ -587,7 +673,6 @@ export default function App(): JSX.Element {
               </>
             )}
 
-            {/* PANEL 2: HISTORY */}
             {activeDrawer === 'history' && (
               <>
                 <div className="kb-btn-row">
@@ -604,7 +689,6 @@ export default function App(): JSX.Element {
                     className="kb-btn danger"
                     style={{ flex: '0 0 auto' }}
                     onClick={() => window.kinetic.clearHistory()}
-                    title="Clear All Profile History"
                   >
                     Clear
                   </button>
@@ -612,7 +696,7 @@ export default function App(): JSX.Element {
 
                 <div className="kb-list-container">
                   {filteredHistory.length === 0 ? (
-                    <div className="kb-empty-state">No browsing history recorded for this profile.</div>
+                    <div className="kb-empty-state">No browsing history recorded yet.</div>
                   ) : (
                     filteredHistory.map((item) => (
                       <div key={item.id} className="kb-card-item">
@@ -633,7 +717,6 @@ export default function App(): JSX.Element {
                           type="button"
                           className="kb-tab-action-btn"
                           onClick={() => window.kinetic.deleteHistoryItem(item.id)}
-                          title="Remove from History"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -644,7 +727,6 @@ export default function App(): JSX.Element {
               </>
             )}
 
-            {/* PANEL 3: DOWNLOADS */}
             {activeDrawer === 'downloads' && (
               <>
                 <div className="kb-btn-row">
@@ -687,7 +769,6 @@ export default function App(): JSX.Element {
                                   type="button"
                                   className="kb-tab-action-btn"
                                   onClick={() => window.kinetic.pauseDownload(dl.id)}
-                                  title="Pause"
                                 >
                                   <Pause size={13} />
                                 </button>
@@ -697,7 +778,6 @@ export default function App(): JSX.Element {
                                   type="button"
                                   className="kb-tab-action-btn"
                                   onClick={() => window.kinetic.resumeDownload(dl.id)}
-                                  title="Resume"
                                 >
                                   <Play size={13} />
                                 </button>
@@ -707,7 +787,6 @@ export default function App(): JSX.Element {
                                   type="button"
                                   className="kb-tab-action-btn"
                                   onClick={() => window.kinetic.cancelDownload(dl.id)}
-                                  title="Cancel"
                                 >
                                   <X size={13} />
                                 </button>
@@ -717,7 +796,6 @@ export default function App(): JSX.Element {
                                   type="button"
                                   className="kb-tab-action-btn"
                                   onClick={() => window.kinetic.showDownloadInFolder(dl.id)}
-                                  title="Show in Explorer"
                                 >
                                   <FolderOpen size={13} />
                                 </button>
@@ -741,12 +819,19 @@ export default function App(): JSX.Element {
               </>
             )}
 
-            {/* PANEL 4: USER PROFILES */}
             {activeDrawer === 'profiles' && (
               <>
                 <span className="kb-setting-desc">
-                  Each profile has isolated cookies, login sessions, cache, and saved tabs.
+                  Switch between isolated browser profiles or launch a Private Tab.
                 </span>
+
+                <button
+                  type="button"
+                  className="kb-btn"
+                  onClick={() => window.kinetic.createTab(undefined, { isPrivate: true })}
+                >
+                  + Open New Private Tab
+                </button>
 
                 <form className="kb-setting-group" onSubmit={handleCreateProfile}>
                   <label className="kb-setting-label">Create New Profile</label>
@@ -755,7 +840,7 @@ export default function App(): JSX.Element {
                       type="text"
                       className="kb-input"
                       style={{ flex: 1 }}
-                      placeholder="Profile name (e.g. Streaming)"
+                      placeholder="Profile name..."
                       value={newProfileName}
                       onChange={(e) => setNewProfileName(e.target.value)}
                     />
@@ -789,14 +874,12 @@ export default function App(): JSX.Element {
                               {prof.name} {isCurrent ? '(Active)' : ''}
                             </span>
                           </div>
-                          <span className="kb-card-sub">Partition: persist:kinetic-profile-{prof.id}</span>
                         </div>
                         {prof.id !== 'default' && (
                           <button
                             type="button"
                             className="kb-tab-action-btn"
                             onClick={() => window.kinetic.deleteProfile(prof.id)}
-                            title="Delete Profile"
                           >
                             <Trash2 size={13} />
                           </button>
@@ -808,11 +891,13 @@ export default function App(): JSX.Element {
               </>
             )}
 
-            {/* PANEL 5: SETTINGS */}
             {activeDrawer === 'settings' && (
               <>
                 <div className="kb-setting-group">
                   <label className="kb-setting-label">Default Search Engine</label>
+                  <span className="kb-setting-desc">
+                    Automatically updates both the Omnibox and New Tab Studio search bar.
+                  </span>
                   <select
                     className="kb-select"
                     value={settings.searchEngine}
@@ -833,7 +918,7 @@ export default function App(): JSX.Element {
                 <div className="kb-checkbox-row">
                   <div>
                     <div className="kb-setting-label">Restore Previous Session</div>
-                    <div className="kb-setting-desc">Reopen last open tabs on browser launch</div>
+                    <div className="kb-setting-desc">Reopen last open tabs on startup</div>
                   </div>
                   <input
                     type="checkbox"
@@ -849,7 +934,7 @@ export default function App(): JSX.Element {
                 <div className="kb-checkbox-row">
                   <div>
                     <div className="kb-setting-label">Show Bookmarks Bar</div>
-                    <div className="kb-setting-desc">Display quick bookmarks under address bar</div>
+                    <div className="kb-setting-desc">Display bookmarks below navigation bar</div>
                   </div>
                   <input
                     type="checkbox"
@@ -890,6 +975,9 @@ export default function App(): JSX.Element {
 
                 <div className="kb-setting-group">
                   <label className="kb-setting-label">Homepage URL</label>
+                  <span className="kb-setting-desc">
+                    Use kinetic://newtab for the custom Kinetic start page.
+                  </span>
                   <input
                     type="text"
                     className="kb-input"
@@ -899,7 +987,7 @@ export default function App(): JSX.Element {
                 </div>
 
                 <div className="kb-setting-group">
-                  <label className="kb-setting-label">New Tab Default URL</label>
+                  <label className="kb-setting-label">New Tab Page</label>
                   <input
                     type="text"
                     className="kb-input"

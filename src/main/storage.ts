@@ -8,6 +8,7 @@ import {
   DEFAULT_SETTINGS,
   DownloadEntry,
   HistoryEntry,
+  KINETIC_NEWTAB_URL,
   SavedSessionTab,
   SEARCH_ENGINES,
   UserProfile
@@ -26,7 +27,7 @@ interface PersistentDatabase {
 
 const DEFAULT_PROFILE: UserProfile = {
   id: 'default',
-  name: 'Main Gamer Profile',
+  name: 'Default',
   color: '#00f0ff',
   createdAt: Date.now()
 }
@@ -42,15 +43,15 @@ const DEFAULT_BOOKMARKS: BookmarkItem[] = [
   },
   {
     id: 'bm-2',
-    title: 'DuckDuckGo',
-    url: 'https://duckduckgo.com',
+    title: 'YouTube',
+    url: 'https://www.youtube.com',
     favicon: '',
     folder: 'Bookmarks Bar',
     createdAt: Date.now()
   },
   {
     id: 'bm-3',
-    title: 'Steam Store',
+    title: 'Steam',
     url: 'https://store.steampowered.com',
     favicon: '',
     folder: 'Gaming',
@@ -86,14 +87,17 @@ export class SettingsStorage {
     const normalizeUrl = (val: unknown, fallback: string): string => {
       if (typeof val !== 'string' || !val.trim()) return fallback
       const trimmed = val.trim()
-      if (/^https?:\/\//i.test(trimmed)) return trimmed
+      if (trimmed === KINETIC_NEWTAB_URL) return KINETIC_NEWTAB_URL
+      // Automatically upgrade old hardcoded duckduckgo homepage/newtab to kinetic://newtab
+      if (trimmed === 'https://duckduckgo.com') return KINETIC_NEWTAB_URL
+      if (/^(https?:\/\/|kinetic:\/\/)/i.test(trimmed)) return trimmed
       return `https://${trimmed}`
     }
 
     return {
       searchEngine: engine,
-      homepageUrl: normalizeUrl(s.homepageUrl, DEFAULT_SETTINGS.homepageUrl),
-      newTabUrl: normalizeUrl(s.newTabUrl, DEFAULT_SETTINGS.newTabUrl),
+      homepageUrl: normalizeUrl(s.homepageUrl, KINETIC_NEWTAB_URL),
+      newTabUrl: normalizeUrl(s.newTabUrl, KINETIC_NEWTAB_URL),
       restorePreviousSession:
         typeof s.restorePreviousSession === 'boolean'
           ? s.restorePreviousSession
@@ -139,7 +143,7 @@ export class SettingsStorage {
             ? parsed.activeProfileId
             : profiles[0].id
 
-        return {
+        const loaded: PersistentDatabase = {
           settings: this.validateSettings(parsed.settings),
           history: Array.isArray(parsed.history) ? parsed.history.slice(0, 1500) : [],
           bookmarks: Array.isArray(parsed.bookmarks) ? parsed.bookmarks : DEFAULT_BOOKMARKS,
@@ -155,6 +159,8 @@ export class SettingsStorage {
               ? parsed.sessionsByProfile
               : {}
         }
+        this.saveToDisk(loaded)
+        return loaded
       }
     } catch (error) {
       console.error('[KineticStorage] Failed to load DB, initializing fresh defaults:', error)
@@ -186,7 +192,6 @@ export class SettingsStorage {
     }
   }
 
-  // Settings
   public getSettings(): BrowserSettings {
     return { ...this.db.settings }
   }
@@ -203,7 +208,6 @@ export class SettingsStorage {
     return this.getSettings()
   }
 
-  // History
   public getHistory(profileId?: string): HistoryEntry[] {
     const pid = profileId || this.db.activeProfileId
     return this.db.history.filter((h) => h.profileId === pid)
@@ -215,7 +219,7 @@ export class SettingsStorage {
     favicon: string
     profileId: string
   }): void {
-    if (!entry.url || entry.url === 'about:blank') return
+    if (!entry.url || entry.url === 'about:blank' || entry.url === KINETIC_NEWTAB_URL) return
 
     const existingIndex = this.db.history.findIndex(
       (h) => h.url === entry.url && h.profileId === entry.profileId
@@ -260,7 +264,6 @@ export class SettingsStorage {
     this.saveToDisk()
   }
 
-  // Bookmarks
   public getBookmarks(): BookmarkItem[] {
     return [...this.db.bookmarks]
   }
@@ -275,9 +278,10 @@ export class SettingsStorage {
     favicon?: string
     folder?: string
   }): BookmarkItem {
-    const folder = data.folder && this.db.bookmarkFolders.includes(data.folder)
-      ? data.folder
-      : 'Bookmarks Bar'
+    const folder =
+      data.folder && this.db.bookmarkFolders.includes(data.folder)
+        ? data.folder
+        : 'Bookmarks Bar'
 
     const existing = this.db.bookmarks.find((b) => b.url === data.url)
     if (existing) {
@@ -315,7 +319,6 @@ export class SettingsStorage {
     return this.getBookmarkFolders()
   }
 
-  // Downloads
   public getDownloads(): DownloadEntry[] {
     return [...this.db.downloads]
   }
@@ -331,11 +334,12 @@ export class SettingsStorage {
   }
 
   public clearCompletedDownloads(): void {
-    this.db.downloads = this.db.downloads.filter((d) => d.status === 'progressing' || d.status === 'paused')
+    this.db.downloads = this.db.downloads.filter(
+      (d) => d.status === 'progressing' || d.status === 'paused'
+    )
     this.saveToDisk()
   }
 
-  // Profiles
   public getProfiles(): UserProfile[] {
     return [...this.db.profiles]
   }
@@ -354,7 +358,7 @@ export class SettingsStorage {
   public createProfile(name: string, color: string): UserProfile {
     const profile: UserProfile = {
       id: `profile-${randomUUID().slice(0, 8)}`,
-      name: name.trim() || 'Gamer Profile',
+      name: name.trim() || 'Custom Profile',
       color: /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#00f0ff',
       createdAt: Date.now()
     }
@@ -374,7 +378,6 @@ export class SettingsStorage {
     this.saveToDisk()
   }
 
-  // Session Restoration per Profile
   public saveProfileSession(
     profileId: string,
     tabs: SavedSessionTab[],

@@ -6,6 +6,7 @@ import {
   BrowserSettings,
   BrowserStatePayload,
   DownloadEntry,
+  KINETIC_NEWTAB_URL,
   SavedSessionTab,
   SEARCH_ENGINES,
   TabState,
@@ -58,7 +59,12 @@ export class BrowserManager {
     if (settings.restorePreviousSession && saved && saved.tabs.length > 0) {
       const createdIds: string[] = []
       for (const savedTab of saved.tabs) {
-        const id = this.createTab(savedTab.url, {
+        // Migrate old default DuckDuckGo start tab to Kinetic New Tab Studio
+        const urlToLoad =
+          savedTab.url === 'https://duckduckgo.com/' || savedTab.url === 'https://duckduckgo.com'
+            ? KINETIC_NEWTAB_URL
+            : savedTab.url
+        const id = this.createTab(urlToLoad, {
           isPrivate: false,
           isPinned: savedTab.isPinned,
           skipSessionSave: true
@@ -70,7 +76,7 @@ export class BrowserManager {
         this.switchTab(createdIds[targetIndex])
       }
     } else {
-      this.createTab()
+      this.createTab(KINETIC_NEWTAB_URL)
     }
   }
 
@@ -131,10 +137,10 @@ export class BrowserManager {
   public resolveInputToUrl(rawInput: string): string {
     const trimmed = rawInput.trim()
     const settings = this.storage.getSettings()
-    const engine = SEARCH_ENGINES[settings.searchEngine] || SEARCH_ENGINES.duckduckgo
+    const engine = SEARCH_ENGINES[settings.searchEngine] || SEARCH_ENGINES.google
 
-    if (!trimmed) {
-      return settings.newTabUrl || engine.homeUrl
+    if (!trimmed || trimmed.toLowerCase() === KINETIC_NEWTAB_URL) {
+      return KINETIC_NEWTAB_URL
     }
 
     if (/^(https?:\/\/|file:\/\/|chrome:\/\/|about:)/i.test(trimmed)) {
@@ -158,13 +164,15 @@ export class BrowserManager {
     options?: { isPrivate?: boolean; isPinned?: boolean; skipSessionSave?: boolean }
   ): string {
     const settings = this.storage.getSettings()
-    const targetUrl = this.resolveInputToUrl(initialInput || settings.newTabUrl)
+    const targetUrl = initialInput
+      ? this.resolveInputToUrl(initialInput)
+      : settings.newTabUrl || KINETIC_NEWTAB_URL
+    const isInternalNewTab = targetUrl === KINETIC_NEWTAB_URL
+
     const tabId = randomUUID()
     const isPrivate = Boolean(options?.isPrivate)
     const profileId = this.storage.getActiveProfileId()
 
-    // Private tabs run in an ephemeral in-memory partition (no persist: prefix)
-    // Standard tabs run inside the active profile's isolated persistent partition
     const partitionName = isPrivate
       ? `kinetic-private-${tabId}`
       : `persist:kinetic-profile-${profileId}`
@@ -186,17 +194,17 @@ export class BrowserManager {
     const cleanUA = defaultUA
       .replace(/\sElectron\/[\d.]+/, '')
       .replace(/\skinetic-browser\/[\d.]+/i, '')
-    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.3.0`)
+    view.webContents.setUserAgent(`${cleanUA} Kinetic/0.3.1`)
 
     const initialState: TabState = {
       id: tabId,
       title: isPrivate ? 'Private Tab' : 'New Tab',
       url: targetUrl,
       favicon: '',
-      isLoading: true,
+      isLoading: !isInternalNewTab,
       canGoBack: false,
       canGoForward: false,
-      isSecure: targetUrl.startsWith('https://'),
+      isSecure: true,
       hasCertError: false,
       isAudioPlaying: false,
       isMuted: false,
@@ -210,9 +218,12 @@ export class BrowserManager {
     this.attachWebContentsListeners(tabId, view)
 
     this.switchTab(tabId)
-    view.webContents.loadURL(targetUrl).catch((err) => {
-      console.warn(`[KineticBrowser] Navigation warning for ${targetUrl}:`, err.message)
-    })
+
+    if (!isInternalNewTab) {
+      view.webContents.loadURL(targetUrl).catch((err) => {
+        console.warn(`[KineticBrowser] Navigation warning for ${targetUrl}:`, err.message)
+      })
+    }
 
     if (!options?.skipSessionSave) {
       this.persistCurrentSession()
@@ -227,12 +238,28 @@ export class BrowserManager {
     const syncNavigationState = (recordHistory = false): void => {
       const tab = this.tabs.get(tabId)
       if (!tab) return
-      const currentUrl = wc.getURL() || tab.state.url
+
+      const rawWcUrl = wc.getURL()
+      if (!rawWcUrl || rawWcUrl === 'about:blank') {
+        if (tab.state.url === KINETIC_NEWTAB_URL) {
+          this.broadcastState()
+          return
+        }
+      }
+
+      const currentUrl = rawWcUrl || tab.state.url
       tab.state.url = currentUrl
-      tab.state.title = wc.getTitle() || currentUrl || 'New Tab'
+      tab.state.title =
+        currentUrl === KINETIC_NEWTAB_URL
+          ? tab.state.isPrivate
+            ? 'Private Tab'
+            : 'New Tab'
+          : wc.getTitle() || currentUrl || 'New Tab'
       tab.state.canGoBack = wc.navigationHistory.canGoBack()
       tab.state.canGoForward = wc.navigationHistory.canGoForward()
-      tab.state.isSecure = currentUrl.startsWith('https://') && !tab.state.hasCertError
+      tab.state.isSecure =
+        currentUrl === KINETIC_NEWTAB_URL ||
+        (currentUrl.startsWith('https://') && !tab.state.hasCertError)
       tab.state.isMuted = wc.isAudioMuted()
 
       if (recordHistory && !tab.state.isPrivate && currentUrl.startsWith('http')) {
@@ -244,13 +271,14 @@ export class BrowserManager {
         })
       }
 
+      this.updateLayoutBounds()
       this.persistCurrentSession()
       this.broadcastState()
     }
 
     wc.on('did-start-loading', () => {
       const tab = this.tabs.get(tabId)
-      if (!tab) return
+      if (!tab || tab.state.url === KINETIC_NEWTAB_URL) return
       tab.state.isLoading = true
       tab.state.hasCertError = false
       syncNavigationState(false)
@@ -258,7 +286,7 @@ export class BrowserManager {
 
     wc.on('did-stop-loading', () => {
       const tab = this.tabs.get(tabId)
-      if (!tab) return
+      if (!tab || tab.state.url === KINETIC_NEWTAB_URL) return
       tab.state.isLoading = false
       syncNavigationState(true)
     })
@@ -268,7 +296,7 @@ export class BrowserManager {
 
     wc.on('page-title-updated', (_event, title) => {
       const tab = this.tabs.get(tabId)
-      if (!tab) return
+      if (!tab || tab.state.url === KINETIC_NEWTAB_URL) return
       tab.state.title = title
       if (!tab.state.isPrivate && tab.state.url.startsWith('http')) {
         this.storage.recordHistoryVisit({
@@ -284,7 +312,7 @@ export class BrowserManager {
 
     wc.on('page-favicon-updated', (_event, favicons) => {
       const tab = this.tabs.get(tabId)
-      if (!tab || favicons.length === 0) return
+      if (!tab || favicons.length === 0 || tab.state.url === KINETIC_NEWTAB_URL) return
       tab.state.favicon = favicons[0]
       this.broadcastState()
     })
@@ -359,7 +387,7 @@ export class BrowserManager {
         try {
           this.baseWindow.contentView.removeChildView(previous.view)
         } catch {
-          // Ignore if already detached
+          // Ignore
         }
       }
     }
@@ -367,7 +395,11 @@ export class BrowserManager {
     this.activeTabId = tabId
     this.baseWindow.contentView.addChildView(target.view)
     this.updateLayoutBounds()
-    target.view.webContents.focus()
+    if (target.state.url !== KINETIC_NEWTAB_URL) {
+      target.view.webContents.focus()
+    } else {
+      this.uiView.webContents.focus()
+    }
     this.persistCurrentSession()
     this.broadcastState()
   }
@@ -387,7 +419,6 @@ export class BrowserManager {
       // Ignore
     }
 
-    // If private tab, clear ephemeral session storage before closing
     if (target.state.isPrivate) {
       target.view.webContents.session.clearStorageData().catch(() => {})
     }
@@ -397,7 +428,7 @@ export class BrowserManager {
 
     if (this.tabOrder.length === 0) {
       this.activeTabId = null
-      this.createTab()
+      this.createTab(KINETIC_NEWTAB_URL)
       return
     }
 
@@ -446,9 +477,22 @@ export class BrowserManager {
 
     const url = this.resolveInputToUrl(rawInput)
     active.state.url = url
+
+    if (url === KINETIC_NEWTAB_URL) {
+      active.state.title = active.state.isPrivate ? 'Private Tab' : 'New Tab'
+      active.state.favicon = ''
+      active.state.isLoading = false
+      active.state.isSecure = true
+      this.updateLayoutBounds()
+      this.broadcastState()
+      return
+    }
+
+    this.updateLayoutBounds()
     active.view.webContents.loadURL(url).catch((err) => {
       console.warn(`[KineticBrowser] Failed to load URL ${url}:`, err.message)
     })
+    active.view.webContents.focus()
     this.broadcastState()
   }
 
@@ -467,7 +511,10 @@ export class BrowserManager {
   }
 
   public reload(): void {
-    this.getActiveTab()?.view.webContents.reload()
+    const active = this.getActiveTab()
+    if (active && active.state.url !== KINETIC_NEWTAB_URL) {
+      active.view.webContents.reload()
+    }
   }
 
   public stop(): void {
@@ -481,14 +528,17 @@ export class BrowserManager {
   public toggleActiveTabDevTools(): void {
     const active = this.getActiveTab()
     if (!active) return
-    if (active.view.webContents.isDevToolsOpened()) {
-      active.view.webContents.closeDevTools()
+    const targetWc =
+      active.state.url === KINETIC_NEWTAB_URL
+        ? this.uiView.webContents
+        : active.view.webContents
+    if (targetWc.isDevToolsOpened()) {
+      targetWc.closeDevTools()
     } else {
-      active.view.webContents.openDevTools({ mode: 'right' })
+      targetWc.openDevTools({ mode: 'right' })
     }
   }
 
-  // History Operations
   public deleteHistoryItem(id: string): void {
     this.storage.deleteHistoryItem(id)
     this.broadcastState()
@@ -499,7 +549,6 @@ export class BrowserManager {
     this.broadcastState()
   }
 
-  // Bookmarks Operations
   public addBookmark(data: {
     title: string
     url: string
@@ -522,12 +571,9 @@ export class BrowserManager {
     return folders
   }
 
-  // Downloads Operations
   public pauseDownload(id: string): void {
     const item = this.activeDownloads.get(id)
-    if (item && item.canResume() && !item.isPaused()) {
-      item.pause()
-    } else if (item && !item.isPaused()) {
+    if (item && !item.isPaused()) {
       item.pause()
     }
   }
@@ -558,7 +604,6 @@ export class BrowserManager {
     this.broadcastState()
   }
 
-  // Profiles Operations
   public createProfile(name: string, color: string): UserProfile {
     const created = this.storage.createProfile(name, color)
     this.broadcastState()
@@ -568,10 +613,8 @@ export class BrowserManager {
   public switchProfile(profileId: string): void {
     if (profileId === this.storage.getActiveProfileId()) return
 
-    // Save current profile tabs before switching
     this.persistCurrentSession()
 
-    // Close all current tabs cleanly
     for (const id of [...this.tabOrder]) {
       const tab = this.tabs.get(id)
       if (tab) {
@@ -603,7 +646,6 @@ export class BrowserManager {
     }
   }
 
-  // Layout Geometry
   public setRightDrawerOpen(isOpen: boolean, width?: number): void {
     this.rightDrawerOpen = isOpen
     if (typeof width === 'number' && width >= 260 && width <= 640) {
@@ -635,6 +677,13 @@ export class BrowserManager {
 
     const active = this.getActiveTab()
     if (!active) return
+
+    // If the active tab is displaying the internal Kinetic New Tab Studio,
+    // hide its native WebContentsView so the React New Tab Studio renders cleanly
+    if (active.state.url === KINETIC_NEWTAB_URL) {
+      active.view.setBounds({ x: 0, y: 0, width: 0, height: 0 })
+      return
+    }
 
     const rightInset = this.rightDrawerOpen ? this.rightDrawerWidth : 0
     const contentWidth = Math.max(200, bounds.width - rightInset)
